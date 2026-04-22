@@ -1342,9 +1342,9 @@ function openModal(workCode){
   const _editBtn = $('modal-edit-btn');
   if (_editBtn && !r._spotify_only) {
     _editBtn.style.display = '';
-    _editBtn.classList.toggle('disabled', !getGASUrl());
-    _editBtn.title = getGASUrl() ? 'Edit this track' : 'Set Apps Script URL in Settings (\u2699) to enable editing';
-    _editBtn.onclick = getGASUrl() ? function(){ showEditForm(workCode); } : function(){ openSettingsModal(); };
+    _editBtn.classList.remove('disabled');
+    _editBtn.title = 'Edit this track';
+    _editBtn.onclick = function(){ showEditForm(workCode); };
   } else if (_editBtn) { _editBtn.style.display = 'none'; }
   $('modal-overlay').classList.add('open');
   document.body.style.overflow='hidden';
@@ -1382,14 +1382,20 @@ window.addEventListener('DOMContentLoaded', async () => {
     ]);
     if (!coreRes.ok) throw new Error('Could not load miyavi_full_merged.json (' + coreRes.status + ')');
     const coreData = await coreRes.json();
-    const overlayData = (overlayRes && overlayRes.ok)
+    const gasOverlay = (overlayRes && overlayRes.ok)
       ? await overlayRes.json().catch(() => ({edits:{},new_records:[]}))
       : {edits:{},new_records:[]};
+    const localOverlay = getLocalOverlay();
+    // Merge: GAS is shared source of truth; local edits layered on top
+    const _edits = Object.assign({}, gasOverlay.edits || {});
+    Object.entries(localOverlay.edits || {}).forEach(([wc,d]) => { _edits[wc]=Object.assign(_edits[wc]||{},d); });
+    const _newRecs = (gasOverlay.new_records || []).concat(
+      (localOverlay.new_records || []).filter(lr => !(gasOverlay.new_records||[]).some(gr=>gr.work_code_raw===lr.work_code_raw))
+    );
     RAW = coreData.compositions || [];
     SPOTIFY_ONLY = coreData.unmatched_spotify || [];
-    const _edits = overlayData.edits || {};
     RAW.forEach(r => { const ed = _edits[r.work_code_raw]; if (ed) Object.assign(r, ed); });
-    (overlayData.new_records || []).forEach(r => { RAW.push(Object.assign({}, r, {_manual: true})); });
+    _newRecs.forEach(r => { RAW.push(Object.assign({}, r, {_manual: true})); });
     RAW_MAP = {};
     RAW.forEach(r => { RAW_MAP[r.work_code_raw] = r; });
     SPO_MAP = {};
@@ -1436,35 +1442,58 @@ function toggleBmg(id){
 // OVERLAY / GOOGLE APPS SCRIPT BACKEND
 // ════════════════════════════════════════
 const GAS_URL_KEY='miyavi_gas_url';
+const LOCAL_OVERLAY_KEY='miyavi_local_overlay';
 let _currentModalWorkCode='';
 function getGASUrl(){ return localStorage.getItem(GAS_URL_KEY)||''; }
+function getLocalOverlay(){
+  try{return JSON.parse(localStorage.getItem(LOCAL_OVERLAY_KEY))||{edits:{},new_records:[]};}
+  catch(e){return {edits:{},new_records:[]};}
+}
+function setLocalOverlay(ov){ localStorage.setItem(LOCAL_OVERLAY_KEY,JSON.stringify(ov)); }
 async function gasPost(payload) {
   const url=getGASUrl();
-  if(!url) throw new Error('No Apps Script URL \u2014 open \u2699 Settings');
+  if(!url) return;
   const r=await fetch(url,{method:'POST',body:JSON.stringify(payload)});
   if(!r.ok) throw new Error('GAS POST '+r.status);
   return r.json();
 }
 async function saveOverlayEdit(workCode,data) {
-  if(!getGASUrl()){showToast('No Apps Script URL \u2014 open \u2699 Settings','err');return;}
-  try {
-    showToast('Saving\u2026');
-    await gasPost({action:'edit',work_code_raw:workCode,data:data});
-    const r=RAW_MAP[workCode]; if(r) Object.assign(r,data);
-    showToast('Saved \u2713','ok');
-  } catch(e){showToast('Save failed: '+e.message,'err');console.error(e);}
+  // Always save locally first
+  const ov=getLocalOverlay();
+  ov.edits[workCode]=Object.assign(ov.edits[workCode]||{},data);
+  setLocalOverlay(ov);
+  const r=RAW_MAP[workCode]; if(r) Object.assign(r,data);
+  // Try GAS sync if configured
+  if(getGASUrl()){
+    try{
+      showToast('Saving\u2026');
+      await gasPost({action:'edit',work_code_raw:workCode,data:data});
+      showToast('Saved \u2713','ok');
+    }catch(e){showToast('Saved locally (sync failed)','ok');console.warn('GAS sync:',e);}
+  } else {
+    showToast('Saved locally \u2713','ok');
+  }
 }
 async function saveNewRecord(record) {
-  if(!getGASUrl()){showToast('No Apps Script URL \u2014 open \u2699 Settings','err');return;}
-  try {
-    showToast('Saving\u2026');
-    record._manual=true; record._created=new Date().toISOString();
-    await gasPost({action:'new_record',record:record});
-    const wc=record.work_code_raw;
-    RAW.push(record); RAW_MAP[wc]=record;
-    AGG=buildAGG(); filtered=AGG.works.slice(); applyFilters();
-    showToast('Track added \u2713','ok');
-  } catch(e){showToast('Save failed: '+e.message,'err');console.error(e);}
+  record._manual=true; record._created=new Date().toISOString();
+  // Always save locally first
+  const ov=getLocalOverlay();
+  ov.new_records=ov.new_records||[];
+  ov.new_records.push(record);
+  setLocalOverlay(ov);
+  const wc=record.work_code_raw;
+  RAW.push(record); RAW_MAP[wc]=record;
+  AGG=buildAGG(); filtered=AGG.works.slice(); applyFilters();
+  // Try GAS sync if configured
+  if(getGASUrl()){
+    try{
+      showToast('Saving\u2026');
+      await gasPost({action:'new_record',record:record});
+      showToast('Track added \u2713','ok');
+    }catch(e){showToast('Added locally (sync failed)','ok');console.warn('GAS sync:',e);}
+  } else {
+    showToast('Track added locally \u2713','ok');
+  }
 }
 let _toastTimer;
 function showToast(msg,type) {
@@ -1508,14 +1537,12 @@ async function testGASConnection(){
   st.style.display='';
 }
 function updateEditButtons(){
-  const hasUrl=!!getGASUrl();
   document.querySelectorAll('.edit-toggle-btn').forEach(btn=>{
-    btn.classList.toggle('disabled',!hasUrl);
-    btn.title=hasUrl?'Edit this track':'Set Apps Script URL in Settings (\u2699) to enable editing';
+    btn.classList.remove('disabled');
+    btn.title='Edit this track';
   });
 }
 function openAddRecordModal(){
-  if(!getGASUrl()){showToast('Set Apps Script URL in Settings (\u2699) first.','err');openSettingsModal();return;}
   ['nr-title','nr-work-code','nr-artist','nr-release','nr-iswc','nr-master-rh','nr-advance','nr-territory','nr-notes']
     .forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   ['nr-source','nr-contract-status'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
@@ -1570,7 +1597,6 @@ function renderEditForm(workCode){
     '</div></div>';
 }
 function showEditForm(workCode){
-  if(!getGASUrl()){showToast('Set Apps Script URL in Settings (\u2699) first.','err');return;}
   const ex=document.getElementById('ef-block');
   if(ex){ex.style.display=ex.style.display==='none'?'':'none';return;}
   const body=document.getElementById('modal-body');
