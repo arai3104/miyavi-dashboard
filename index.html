@@ -4,218 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MIYAVI — JASRAC / J-WID Rights Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous">
-// ════════════════════════════════════════
-// OVERLAY / GITHUB API
-// ════════════════════════════════════════
-const GH_PAT_KEY='miyavi_gh_pat', GH_OWNER_KEY='miyavi_gh_owner', GH_REPO_KEY='miyavi_gh_repo';
-let _currentModalWorkCode='';
-function getGHPat()   { return localStorage.getItem(GH_PAT_KEY)||''; }
-function getGHOwner() { return localStorage.getItem(GH_OWNER_KEY)||''; }
-function getGHRepo()  { return localStorage.getItem(GH_REPO_KEY)||''; }
-function ghHdr() {
-  return {'Authorization':'token '+getGHPat(),'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'};
-}
-async function ghGet(path) {
-  const r=await fetch('https://api.github.com/repos/'+getGHOwner()+'/'+getGHRepo()+'/contents/'+path,{headers:ghHdr()});
-  if(!r.ok) throw new Error('GitHub GET '+r.status+' '+r.statusText);
-  return r.json();
-}
-async function ghPut(path,data,sha,msg) {
-  const enc=btoa(unescape(encodeURIComponent(JSON.stringify(data,null,2)+'\n')));
-  const r=await fetch('https://api.github.com/repos/'+getGHOwner()+'/'+getGHRepo()+'/contents/'+path,
-    {method:'PUT',headers:ghHdr(),body:JSON.stringify({message:msg||'Update overlay',content:enc,sha:sha})});
-  if(!r.ok){const e=await r.json().catch(()=>({})); throw new Error(e.message||'GitHub PUT '+r.status);}
-  return r.json();
-}
-async function saveOverlayEdit(workCode,data) {
-  if(!getGHPat()){showToast('No GitHub token \u2014 open \u2699 Settings','err');return;}
-  if(!getGHOwner()||!getGHRepo()){showToast('Set GitHub owner/repo in Settings','err');return;}
-  try {
-    showToast('Saving\u2026');
-    const file=await ghGet('overlay.json');
-    const ov=JSON.parse(atob(file.content.replace(/\n/g,'')));
-    ov.edits=ov.edits||{};
-    ov.edits[workCode]=Object.assign(ov.edits[workCode]||{},data);
-    await ghPut('overlay.json',ov,file.sha,'Update rights: '+workCode);
-    const r=RAW_MAP[workCode]; if(r) Object.assign(r,data);
-    showToast('Saved \u2713','ok');
-  } catch(e){showToast('Save failed: '+e.message,'err');console.error(e);}
-}
-async function saveNewRecord(record) {
-  if(!getGHPat()){showToast('No GitHub token \u2014 open \u2699 Settings','err');return;}
-  if(!getGHOwner()||!getGHRepo()){showToast('Set GitHub owner/repo in Settings','err');return;}
-  try {
-    showToast('Saving\u2026');
-    const file=await ghGet('overlay.json');
-    const ov=JSON.parse(atob(file.content.replace(/\n/g,'')));
-    ov.new_records=ov.new_records||[];
-    record._manual=true; record._created=new Date().toISOString();
-    ov.new_records.push(record);
-    await ghPut('overlay.json',ov,file.sha,'Add track: '+record.title);
-    RAW.push(record); RAW_MAP[record.work_code_raw]=record;
-    AGG=buildAGG(); filtered=AGG.works.slice(); applyFilters();
-    showToast('Track added \u2713','ok');
-  } catch(e){showToast('Save failed: '+e.message,'err');console.error(e);}
-}
-// Toast
-let _toastTimer;
-function showToast(msg,type) {
-  const el=document.getElementById('toast-el'); if(!el) return;
-  el.textContent=msg; el.className='toast show'+(type?' '+type:'');
-  clearTimeout(_toastTimer);
-  if(type) _toastTimer=setTimeout(()=>{el.className='toast';},3200);
-}
-// Loading
-function showLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.remove('hidden');}
-function hideLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.add('hidden');}
-// Settings modal
-function openSettingsModal(){
-  document.getElementById('gh-owner').value=getGHOwner();
-  document.getElementById('gh-repo').value=getGHRepo();
-  document.getElementById('gh-pat').value=getGHPat();
-  const st=document.getElementById('pat-status'); if(st) st.style.display='none';
-  document.getElementById('settings-modal').classList.remove('hidden');
-}
-function closeSettingsModal(){document.getElementById('settings-modal').classList.add('hidden');}
-function saveSettings(){
-  const owner=document.getElementById('gh-owner').value.trim();
-  const repo=document.getElementById('gh-repo').value.trim();
-  const pat=document.getElementById('gh-pat').value.trim();
-  if(owner)localStorage.setItem(GH_OWNER_KEY,owner);
-  if(repo)localStorage.setItem(GH_REPO_KEY,repo);
-  if(pat)localStorage.setItem(GH_PAT_KEY,pat);
-  closeSettingsModal(); updateEditButtons(); showToast('Settings saved \u2713','ok');
-}
-function clearGHPat(){
-  localStorage.removeItem(GH_PAT_KEY);
-  document.getElementById('gh-pat').value='';
-  const st=document.getElementById('pat-status');
-  if(st){st.textContent='Token cleared.';st.className='pat-status pat-err';st.style.display='';}
-  updateEditButtons();
-}
-async function testGHConnection(){
-  const pat=document.getElementById('gh-pat').value.trim();
-  const st=document.getElementById('pat-status');
-  if(!st)return;
-  if(!pat){st.textContent='Enter a PAT first.';st.className='pat-status pat-err';st.style.display='';return;}
-  st.textContent='Testing\u2026';st.className='pat-status';st.style.display='';
-  try{
-    const res=await fetch('https://api.github.com/user',{headers:{'Authorization':'token '+pat,'Accept':'application/vnd.github.v3+json'}});
-    const data=await res.json();
-    if(data.login){st.textContent='\u2713 Connected as '+data.login;st.className='pat-status pat-ok';}
-    else{st.textContent='\u2717 Invalid token';st.className='pat-status pat-err';}
-  }catch(e){st.textContent='\u2717 '+e.message;st.className='pat-status pat-err';}
-  st.style.display='';
-}
-function updateEditButtons(){
-  const hasPat=!!getGHPat();
-  document.querySelectorAll('.edit-toggle-btn').forEach(btn=>{
-    btn.classList.toggle('disabled',!hasPat);
-    btn.title=hasPat?'Edit this track':'Set a GitHub token in Settings to enable editing';
-  });
-}
-// Add Record modal
-function openAddRecordModal(){
-  if(!getGHPat()){showToast('Set a GitHub token in Settings (\u2699) first.','err');openSettingsModal();return;}
-  ['nr-title','nr-work-code','nr-artist','nr-release','nr-iswc','nr-master-rh','nr-advance','nr-territory','nr-notes']
-    .forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  ['nr-source','nr-contract-status'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  ['nr-license-start','nr-license-end'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  document.getElementById('add-record-modal').classList.remove('hidden');
-}
-function closeAddRecordModal(){document.getElementById('add-record-modal').classList.add('hidden');}
-async function submitNewRecord(){
-  const title=document.getElementById('nr-title').value.trim();
-  if(!title){alert('Title is required.');return;}
-  const wc=document.getElementById('nr-work-code').value.trim()||('manual-'+Date.now());
-  const record={
-    track_number:'',work_code_raw:wc,work_code:wc.replace(/-/g,''),title:title,
-    primary_artist:document.getElementById('nr-artist').value.trim(),
-    release_period:document.getElementById('nr-release').value.trim(),
-    source_type:document.getElementById('nr-source').value,
-    iswc_csv:document.getElementById('nr-iswc').value.trim(),
-    iswc_jwid:document.getElementById('nr-iswc').value.trim(),
-    status:'Manual',chui_sakuhin:'',rights_holders:[],dist_holds:[],titles:[],alt_titles:[],
-    master_rh:document.getElementById('nr-master-rh').value.trim(),
-    master_license_start:document.getElementById('nr-license-start').value,
-    master_license_end:document.getElementById('nr-license-end').value,
-    advance_amount:document.getElementById('nr-advance').value.trim(),
-    territory:document.getElementById('nr-territory').value.trim(),
-    contract_status:document.getElementById('nr-contract-status').value,
-    internal_notes:document.getElementById('nr-notes').value.trim(),
-    _manual:true,
-  };
-  closeAddRecordModal();
-  await saveNewRecord(record);
-}
-// Edit form in modal
-function renderEditForm(workCode){
-  const r=RAW_MAP[workCode]||{};
-  const cs=r.contract_status||'';
-  return '<div class="edit-section" id="ef-block"><h4>Edit Master &amp; Rights Info</h4>'+
-    '<div class="edit-form-grid">'+
-    '<div class="ef-group"><label>Master Right Holder</label><input type="text" id="ef-master-rh" value="'+esc(r.master_rh||'')+'" placeholder="Label / company"></div>'+
-    '<div class="ef-group"><label>Contract Status</label><select id="ef-contract-status">'+
-      '<option value="">\u2014 select \u2014</option>'+
-      '<option value="Active"'+(cs==='Active'?' selected':'')+'>Active</option>'+
-      '<option value="Expired"'+(cs==='Expired'?' selected':'')+'>Expired</option>'+
-      '<option value="Pending"'+(cs==='Pending'?' selected':'')+'>Pending</option>'+
-    '</select></div>'+
-    '<div class="ef-group"><label>License Start</label><input type="date" id="ef-license-start" value="'+esc(r.master_license_start||'')+'"></div>'+
-    '<div class="ef-group"><label>License End</label><input type="date" id="ef-license-end" value="'+esc(r.master_license_end||'')+'"></div>'+
-    '<div class="ef-group"><label>Advance Amount</label><input type="text" id="ef-advance" value="'+esc(r.advance_amount||'')+'" placeholder="e.g. \xa5500,000"></div>'+
-    '<div class="ef-group"><label>Territory</label><input type="text" id="ef-territory" value="'+esc(r.territory||'')+'" placeholder="e.g. WW, JP"></div>'+
-    '<div class="ef-group full"><label>Internal Notes</label><textarea id="ef-internal-notes" placeholder="Team notes\u2026">'+esc(r.internal_notes||'')+'</textarea></div>'+
-    '</div><div class="ef-save-row">'+
-    '<button class="btn-ef-cancel" onclick="hideEditForm()">Cancel</button>'+
-    '<button class="btn-ef-save" onclick="doSaveEdit(\''+workCode.replace(/\\/g,'\\\\').replace(/'/g,"\\'")+'\')">Save Changes</button>'+
-    '</div></div>';
-}
-function showEditForm(workCode){
-  if(!getGHPat()){showToast('Set a GitHub token in Settings (\u2699) first.','err');return;}
-  const ex=document.getElementById('ef-block');
-  if(ex){ex.style.display=ex.style.display==='none'?'':'none';return;}
-  const body=document.getElementById('modal-body');
-  body.insertAdjacentHTML('beforeend',renderEditForm(workCode));
-  body.scrollTop=body.scrollHeight;
-}
-function hideEditForm(){const el=document.getElementById('ef-block');if(el)el.style.display='none';}
-async function doSaveEdit(workCode){
-  const g=id=>{const el=document.getElementById(id);return el?el.value.trim():'';};
-  const data={
-    master_rh:g('ef-master-rh'),master_license_start:g('ef-license-start'),
-    master_license_end:g('ef-license-end'),advance_amount:g('ef-advance'),
-    territory:g('ef-territory'),contract_status:g('ef-contract-status'),
-    internal_notes:(document.getElementById('ef-internal-notes')||{}).value||'',
-  };
-  hideEditForm();
-  await saveOverlayEdit(workCode,data);
-  openModal(workCode);
-}
-// Master rights display
-function renderMasterRightsSection(r){
-  if(!r) return '';
-  const fields=[['Master Right Holder',r.master_rh],['License Start',r.master_license_start],
-    ['License End',r.master_license_end],['Advance Amount',r.advance_amount],['Territory',r.territory]];
-  const filled=fields.filter(([,v])=>v&&String(v).trim());
-  if(!filled.length&&!r.contract_status&&!r.internal_notes) return '';
-  let html='<div class="msec"><div class="msec-title">Master Recording Rights</div>';
-  if(filled.length||r.contract_status){
-    html+='<div class="master-rights-grid">';
-    filled.forEach(([l,v])=>{ html+='<div class="meta-item"><div class="meta-lbl">'+esc(l)+'</div><div class="meta-val">'+esc(v)+'</div></div>'; });
-    if(r.contract_status){
-      const cs=r.contract_status;
-      const cls=cs==='Active'?'status-active':cs==='Expired'?'status-expired':'status-pending';
-      html+='<div class="meta-item"><div class="meta-lbl">Contract Status</div><div class="meta-val"><span class="status-pill '+cls+'">'+esc(cs)+'</span></div></div>';
-    }
-    html+='</div>';
-  }
-  if(r.internal_notes) html+='<div style="margin-top:10px;"><div class="meta-lbl">Internal Notes</div><div style="font-size:12px;margin-top:4px;white-space:pre-wrap;color:var(--text);">'+esc(r.internal_notes)+'</div></div>';
-  return html+'</div>';
-}
-
-</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
 <style>
 :root{
   --bg:#f0f2f5;--card:#fff;--header:#0f172a;--accent:#6366f1;
@@ -1643,6 +1432,212 @@ function toggleBmg(id){
     el.textContent = fullVal;
     el.dataset.expanded='1'; btn.textContent='Show less ▴';
   }
+}
+
+
+// ════════════════════════════════════════
+// OVERLAY / GITHUB API
+// ════════════════════════════════════════
+const GH_PAT_KEY='miyavi_gh_pat', GH_OWNER_KEY='miyavi_gh_owner', GH_REPO_KEY='miyavi_gh_repo';
+let _currentModalWorkCode='';
+function getGHPat()   { return localStorage.getItem(GH_PAT_KEY)||''; }
+function getGHOwner() { return localStorage.getItem(GH_OWNER_KEY)||''; }
+function getGHRepo()  { return localStorage.getItem(GH_REPO_KEY)||''; }
+function ghHdr() {
+  return {'Authorization':'token '+getGHPat(),'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'};
+}
+async function ghGet(path) {
+  const r=await fetch('https://api.github.com/repos/'+getGHOwner()+'/'+getGHRepo()+'/contents/'+path,{headers:ghHdr()});
+  if(!r.ok) throw new Error('GitHub GET '+r.status+' '+r.statusText);
+  return r.json();
+}
+async function ghPut(path,data,sha,msg) {
+  const enc=btoa(unescape(encodeURIComponent(JSON.stringify(data,null,2)+'\n')));
+  const r=await fetch('https://api.github.com/repos/'+getGHOwner()+'/'+getGHRepo()+'/contents/'+path,
+    {method:'PUT',headers:ghHdr(),body:JSON.stringify({message:msg||'Update overlay',content:enc,sha:sha})});
+  if(!r.ok){const e=await r.json().catch(()=>({})); throw new Error(e.message||'GitHub PUT '+r.status);}
+  return r.json();
+}
+async function saveOverlayEdit(workCode,data) {
+  if(!getGHPat()){showToast('No GitHub token \u2014 open \u2699 Settings','err');return;}
+  if(!getGHOwner()||!getGHRepo()){showToast('Set GitHub owner/repo in Settings','err');return;}
+  try {
+    showToast('Saving\u2026');
+    const file=await ghGet('overlay.json');
+    const ov=JSON.parse(atob(file.content.replace(/\n/g,'')));
+    ov.edits=ov.edits||{};
+    ov.edits[workCode]=Object.assign(ov.edits[workCode]||{},data);
+    await ghPut('overlay.json',ov,file.sha,'Update rights: '+workCode);
+    const r=RAW_MAP[workCode]; if(r) Object.assign(r,data);
+    showToast('Saved \u2713','ok');
+  } catch(e){showToast('Save failed: '+e.message,'err');console.error(e);}
+}
+async function saveNewRecord(record) {
+  if(!getGHPat()){showToast('No GitHub token \u2014 open \u2699 Settings','err');return;}
+  if(!getGHOwner()||!getGHRepo()){showToast('Set GitHub owner/repo in Settings','err');return;}
+  try {
+    showToast('Saving\u2026');
+    const file=await ghGet('overlay.json');
+    const ov=JSON.parse(atob(file.content.replace(/\n/g,'')));
+    ov.new_records=ov.new_records||[];
+    record._manual=true; record._created=new Date().toISOString();
+    ov.new_records.push(record);
+    await ghPut('overlay.json',ov,file.sha,'Add track: '+record.title);
+    const wc=record.work_code_raw;
+    RAW.push(record); RAW_MAP[wc]=record;
+    AGG=buildAGG(); filtered=AGG.works.slice(); applyFilters();
+    showToast('Track added \u2713','ok');
+  } catch(e){showToast('Save failed: '+e.message,'err');console.error(e);}
+}
+let _toastTimer;
+function showToast(msg,type) {
+  const el=document.getElementById('toast-el'); if(!el) return;
+  el.textContent=msg; el.className='toast show'+(type?' '+type:'');
+  clearTimeout(_toastTimer);
+  if(type) _toastTimer=setTimeout(()=>{el.className='toast';},3200);
+}
+function showLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.remove('hidden');}
+function hideLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.add('hidden');}
+function openSettingsModal(){
+  document.getElementById('gh-owner').value=getGHOwner();
+  document.getElementById('gh-repo').value=getGHRepo();
+  document.getElementById('gh-pat').value=getGHPat();
+  const st=document.getElementById('pat-status'); if(st) st.style.display='none';
+  document.getElementById('settings-modal').classList.remove('hidden');
+}
+function closeSettingsModal(){document.getElementById('settings-modal').classList.add('hidden');}
+function saveSettings(){
+  const owner=document.getElementById('gh-owner').value.trim();
+  const repo=document.getElementById('gh-repo').value.trim();
+  const pat=document.getElementById('gh-pat').value.trim();
+  if(owner)localStorage.setItem(GH_OWNER_KEY,owner);
+  if(repo)localStorage.setItem(GH_REPO_KEY,repo);
+  if(pat)localStorage.setItem(GH_PAT_KEY,pat);
+  closeSettingsModal(); updateEditButtons(); showToast('Settings saved \u2713','ok');
+}
+function clearGHPat(){
+  localStorage.removeItem(GH_PAT_KEY);
+  document.getElementById('gh-pat').value='';
+  const st=document.getElementById('pat-status');
+  if(st){st.textContent='Token cleared.';st.className='pat-status pat-err';st.style.display='';}
+  updateEditButtons();
+}
+async function testGHConnection(){
+  const pat=document.getElementById('gh-pat').value.trim();
+  const st=document.getElementById('pat-status');
+  if(!st)return;
+  if(!pat){st.textContent='Enter a PAT first.';st.className='pat-status pat-err';st.style.display='';return;}
+  st.textContent='Testing\u2026';st.className='pat-status';st.style.display='';
+  try{
+    const res=await fetch('https://api.github.com/user',{headers:{'Authorization':'token '+pat,'Accept':'application/vnd.github.v3+json'}});
+    const data=await res.json();
+    if(data.login){st.textContent='\u2713 Connected as '+data.login;st.className='pat-status pat-ok';}
+    else{st.textContent='\u2717 Invalid token';st.className='pat-status pat-err';}
+  }catch(e){st.textContent='\u2717 '+e.message;st.className='pat-status pat-err';}
+  st.style.display='';
+}
+function updateEditButtons(){
+  const hasPat=!!getGHPat();
+  document.querySelectorAll('.edit-toggle-btn').forEach(btn=>{
+    btn.classList.toggle('disabled',!hasPat);
+    btn.title=hasPat?'Edit this track':'Set a GitHub token in Settings to enable editing';
+  });
+}
+function openAddRecordModal(){
+  if(!getGHPat()){showToast('Set a GitHub token in Settings (\u2699) first.','err');openSettingsModal();return;}
+  ['nr-title','nr-work-code','nr-artist','nr-release','nr-iswc','nr-master-rh','nr-advance','nr-territory','nr-notes']
+    .forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['nr-source','nr-contract-status'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['nr-license-start','nr-license-end'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('add-record-modal').classList.remove('hidden');
+}
+function closeAddRecordModal(){document.getElementById('add-record-modal').classList.add('hidden');}
+async function submitNewRecord(){
+  const title=document.getElementById('nr-title').value.trim();
+  if(!title){alert('Title is required.');return;}
+  const wc=document.getElementById('nr-work-code').value.trim()||('manual-'+Date.now());
+  const record={
+    track_number:'',work_code_raw:wc,work_code:wc.replace(/-/g,''),title:title,
+    primary_artist:document.getElementById('nr-artist').value.trim(),
+    release_period:document.getElementById('nr-release').value.trim(),
+    source_type:document.getElementById('nr-source').value,
+    iswc_csv:document.getElementById('nr-iswc').value.trim(),
+    iswc_jwid:document.getElementById('nr-iswc').value.trim(),
+    status:'Manual',chui_sakuhin:'',rights_holders:[],dist_holds:[],titles:[],alt_titles:[],
+    master_rh:document.getElementById('nr-master-rh').value.trim(),
+    master_license_start:document.getElementById('nr-license-start').value,
+    master_license_end:document.getElementById('nr-license-end').value,
+    advance_amount:document.getElementById('nr-advance').value.trim(),
+    territory:document.getElementById('nr-territory').value.trim(),
+    contract_status:document.getElementById('nr-contract-status').value,
+    internal_notes:document.getElementById('nr-notes').value.trim(),
+    _manual:true,
+  };
+  closeAddRecordModal();
+  await saveNewRecord(record);
+}
+function renderEditForm(workCode){
+  const r=RAW_MAP[workCode]||{};
+  const cs=r.contract_status||'';
+  return '<div class="edit-section" id="ef-block"><h4>Edit Master &amp; Rights Info</h4>'+
+    '<div class="edit-form-grid">'+
+    '<div class="ef-group"><label>Master Right Holder</label><input type="text" id="ef-master-rh" value="'+esc(r.master_rh||'')+'" placeholder="Label / company"></div>'+
+    '<div class="ef-group"><label>Contract Status</label><select id="ef-contract-status">'+
+      '<option value="">\u2014 select \u2014</option>'+
+      '<option value="Active"'+(cs==='Active'?' selected':'')+'>Active</option>'+
+      '<option value="Expired"'+(cs==='Expired'?' selected':'')+'>Expired</option>'+
+      '<option value="Pending"'+(cs==='Pending'?' selected':'')+'>Pending</option>'+
+    '</select></div>'+
+    '<div class="ef-group"><label>License Start</label><input type="date" id="ef-license-start" value="'+esc(r.master_license_start||'')+'"></div>'+
+    '<div class="ef-group"><label>License End</label><input type="date" id="ef-license-end" value="'+esc(r.master_license_end||'')+'"></div>'+
+    '<div class="ef-group"><label>Advance Amount</label><input type="text" id="ef-advance" value="'+esc(r.advance_amount||'')+'" placeholder="e.g. \xa5500,000"></div>'+
+    '<div class="ef-group"><label>Territory</label><input type="text" id="ef-territory" value="'+esc(r.territory||'')+'" placeholder="e.g. WW, JP"></div>'+
+    '<div class="ef-group full"><label>Internal Notes</label><textarea id="ef-internal-notes" placeholder="Team notes\u2026">'+esc(r.internal_notes||'')+'</textarea></div>'+
+    '</div><div class="ef-save-row">'+
+    '<button class="btn-ef-cancel" onclick="hideEditForm()">Cancel</button>'+
+    '<button class="btn-ef-save" onclick="doSaveEdit(\''+workCode.replace(/\\/g,'\\\\').replace(/'/g,"\\'")+'\')">Save Changes</button>'+
+    '</div></div>';
+}
+function showEditForm(workCode){
+  if(!getGHPat()){showToast('Set a GitHub token in Settings (\u2699) first.','err');return;}
+  const ex=document.getElementById('ef-block');
+  if(ex){ex.style.display=ex.style.display==='none'?'':'none';return;}
+  const body=document.getElementById('modal-body');
+  body.insertAdjacentHTML('beforeend',renderEditForm(workCode));
+  body.scrollTop=body.scrollHeight;
+}
+function hideEditForm(){const el=document.getElementById('ef-block');if(el)el.style.display='none';}
+async function doSaveEdit(workCode){
+  const g=id=>{const el=document.getElementById(id);return el?el.value.trim():'';};
+  const data={
+    master_rh:g('ef-master-rh'),master_license_start:g('ef-license-start'),
+    master_license_end:g('ef-license-end'),advance_amount:g('ef-advance'),
+    territory:g('ef-territory'),contract_status:g('ef-contract-status'),
+    internal_notes:(document.getElementById('ef-internal-notes')||{}).value||'',
+  };
+  hideEditForm();
+  await saveOverlayEdit(workCode,data);
+  openModal(workCode);
+}
+function renderMasterRightsSection(r){
+  if(!r) return '';
+  const fields=[['Master Right Holder',r.master_rh],['License Start',r.master_license_start],
+    ['License End',r.master_license_end],['Advance Amount',r.advance_amount],['Territory',r.territory]];
+  const filled=fields.filter(([,v])=>v&&String(v).trim());
+  if(!filled.length&&!r.contract_status&&!r.internal_notes) return '';
+  let html='<div class="msec"><div class="msec-title">Master Recording Rights</div>';
+  if(filled.length||r.contract_status){
+    html+='<div class="master-rights-grid">';
+    filled.forEach(([l,v])=>{ html+='<div class="meta-item"><div class="meta-lbl">'+esc(l)+'</div><div class="meta-val">'+esc(v)+'</div></div>'; });
+    if(r.contract_status){
+      const cs=r.contract_status;
+      const cls=cs==='Active'?'status-active':cs==='Expired'?'status-expired':'status-pending';
+      html+='<div class="meta-item"><div class="meta-lbl">Contract Status</div><div class="meta-val"><span class="status-pill '+cls+'">'+esc(cs)+'</span></div></div>';
+    }
+    html+='</div>';
+  }
+  if(r.internal_notes) html+='<div style="margin-top:10px;"><div class="meta-lbl">Internal Notes</div><div style="font-size:12px;margin-top:4px;white-space:pre-wrap;color:var(--text);">'+esc(r.internal_notes)+'</div></div>';
+  return html+'</div>';
 }
 
 </script>
