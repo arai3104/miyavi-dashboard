@@ -2,11 +2,20 @@
 // Deploy as: Extensions → Apps Script → Deploy → New deployment
 //   Type: Web app | Execute as: Me | Who has access: Anyone
 //
-// Spreadsheet needs two sheets: "Edits" and "NewRecords"
-// Edits columns:    work_code_raw | field | value | updated_at
-// NewRecords cols:  work_code_raw | title | json | created_at
+// Sheets used:
+//   Works      — all tracks (populated once by populateInitialData)
+//   Edits      — per-field edits made via dashboard Edit form
+//   NewRecords — manually added tracks
 
 const SS_ID = 'YOUR_SPREADSHEET_ID_HERE'; // ← paste your Spreadsheet ID
+
+// Column layout for Works sheet
+const WORKS_HEADERS = [
+  'work_code_raw', 'title', 'primary_artist', 'release_period', 'source_type',
+  'iswc', 'status', 'chui_sakuhin',
+  'master_rh', 'master_license_start', 'master_license_end',
+  'advance_amount', 'territory', 'contract_status', 'internal_notes'
+];
 
 function doGet(e) {
   try {
@@ -30,7 +39,7 @@ function doGet(e) {
       return jsonResponse({ok: false, error: 'Unknown action'});
     }
 
-    // Default: return full overlay
+    // Default: return full overlay (edits from Works sheet + Edits sheet + NewRecords)
     return jsonResponse(buildOverlay());
   } catch(err) {
     return jsonResponse({ok: false, error: err.toString()});
@@ -38,15 +47,37 @@ function doGet(e) {
 }
 
 function doPost(e) {
-  // Kept for compatibility but mutations now go through doGet
   return doGet(e);
 }
 
 function buildOverlay() {
   const ss = SpreadsheetApp.openById(SS_ID);
   const edits = {};
+
+  // Read editable fields from Works sheet (master rights columns)
+  const worksSheet = ss.getSheetByName('Works');
+  if (worksSheet && worksSheet.getLastRow() > 1) {
+    const rows = worksSheet.getDataRange().getValues();
+    const headers = rows[0];
+    const editableFields = ['master_rh','master_license_start','master_license_end',
+                            'advance_amount','territory','contract_status','internal_notes'];
+    const wcIdx = headers.indexOf('work_code_raw');
+    for (let i = 1; i < rows.length; i++) {
+      const wc = rows[i][wcIdx];
+      if (!wc) continue;
+      editableFields.forEach(field => {
+        const idx = headers.indexOf(field);
+        if (idx >= 0 && rows[i][idx] !== '' && rows[i][idx] !== null) {
+          edits[wc] = edits[wc] || {};
+          edits[wc][field] = rows[i][idx];
+        }
+      });
+    }
+  }
+
+  // Read point edits from Edits sheet (dashboard Edit form saves here)
   const editsSheet = ss.getSheetByName('Edits');
-  if (editsSheet) {
+  if (editsSheet && editsSheet.getLastRow() > 1) {
     const rows = editsSheet.getDataRange().getValues();
     for (let i = 1; i < rows.length; i++) {
       const [wc, field, value] = rows[i];
@@ -56,9 +87,10 @@ function buildOverlay() {
     }
   }
 
+  // Read manually added tracks
   const new_records = [];
   const nrSheet = ss.getSheetByName('NewRecords');
-  if (nrSheet) {
+  if (nrSheet && nrSheet.getLastRow() > 1) {
     const rows = nrSheet.getDataRange().getValues();
     for (let i = 1; i < rows.length; i++) {
       const [wc, title, json] = rows[i];
@@ -72,6 +104,25 @@ function buildOverlay() {
 
 function saveEdit(workCode, data) {
   const ss = SpreadsheetApp.openById(SS_ID);
+
+  // Try to update the Works sheet first (for editable columns)
+  const worksSheet = ss.getSheetByName('Works');
+  if (worksSheet && worksSheet.getLastRow() > 1) {
+    const rows = worksSheet.getDataRange().getValues();
+    const headers = rows[0];
+    const wcIdx = headers.indexOf('work_code_raw');
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i][wcIdx] === workCode) {
+        Object.entries(data).forEach(([field, value]) => {
+          const idx = headers.indexOf(field);
+          if (idx >= 0) worksSheet.getRange(i + 1, idx + 1).setValue(value);
+        });
+        return; // updated in Works sheet, done
+      }
+    }
+  }
+
+  // Fallback: save to Edits sheet (for tracks not yet in Works)
   let sheet = ss.getSheetByName('Edits');
   if (!sheet) {
     sheet = ss.insertSheet('Edits');
@@ -80,7 +131,6 @@ function saveEdit(workCode, data) {
   const now = new Date().toISOString();
   const rows = sheet.getDataRange().getValues();
   Object.entries(data).forEach(([field, value]) => {
-    // update existing row if present, else append
     let found = false;
     for (let i = 1; i < rows.length; i++) {
       if (rows[i][0] === workCode && rows[i][1] === field) {
@@ -104,6 +154,30 @@ function saveNewRecord(record) {
     sheet.appendRow(['work_code_raw', 'title', 'json', 'created_at']);
   }
   sheet.appendRow([record.work_code_raw || '', record.title || '', JSON.stringify(record), new Date().toISOString()]);
+}
+
+// ── Run this ONCE from the Apps Script editor to populate the Works sheet ──
+function populateInitialData() {
+  const url = 'https://arai3104.github.io/miyavi-dashboard/miyavi_full_merged.json';
+  const resp = UrlFetchApp.fetch(url);
+  const data = JSON.parse(resp.getContentText());
+  const compositions = data.compositions || [];
+
+  const ss = SpreadsheetApp.openById(SS_ID);
+  let sheet = ss.getSheetByName('Works');
+  if (sheet) ss.deleteSheet(sheet);
+  sheet = ss.insertSheet('Works');
+
+  sheet.appendRow(WORKS_HEADERS);
+  const rows = compositions.map(c => WORKS_HEADERS.map(h => {
+    const v = c[h];
+    return (v === null || v === undefined) ? '' : v;
+  }));
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, WORKS_HEADERS.length).setValues(rows);
+  }
+
+  Logger.log('Done: ' + rows.length + ' tracks written to Works sheet.');
 }
 
 function jsonResponse(data) {
