@@ -285,6 +285,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .edit-toggle-btn{padding:4px 12px;border:1px solid rgba(129,140,248,.55);border-radius:5px;background:rgba(99,102,241,.15);color:#a5b4fc;font-size:11px;cursor:pointer;font-weight:600;transition:background .15s;}
 .edit-toggle-btn:hover{background:rgba(99,102,241,.28);}
 .edit-toggle-btn.disabled{opacity:.4;cursor:not-allowed;}
+.btn-delete-record{padding:4px 10px;border:1px solid rgba(239,68,68,.4);border-radius:5px;background:rgba(239,68,68,.1);color:#fca5a5;font-size:11px;cursor:pointer;font-weight:600;transition:background .15s;}
+.btn-delete-record:hover{background:rgba(239,68,68,.25);}
 .master-rights-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;}
 .master-rights-grid .meta-item{display:flex;flex-direction:column;gap:2px;}
 .status-pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;}
@@ -472,7 +474,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     <div class="modal-hdr">
       <div class="modal-hdr-top">
         <div class="modal-title" id="modal-title"></div>
-        <div style="display:flex;gap:6px;align-items:center;"><button class="edit-toggle-btn" id="modal-edit-btn" style="display:none">Edit</button>        <button class="modal-close" onclick="closeModalBtn()">✕</button></div>
+        <div style="display:flex;gap:6px;align-items:center;"><button class="edit-toggle-btn" id="modal-edit-btn" style="display:none">Edit</button><button class="btn-delete-record" id="modal-delete-btn" style="display:none" title="Hide this record">🗑 Delete</button>        <button class="modal-close" onclick="closeModalBtn()">✕</button></div>
       </div>
       <div class="modal-sub" id="modal-sub"></div>
     </div>
@@ -1346,6 +1348,11 @@ function openModal(workCode){
     _editBtn.title = 'Edit this track';
     _editBtn.onclick = function(){ showEditForm(workCode); };
   } else if (_editBtn) { _editBtn.style.display = 'none'; }
+  const _delBtn = $('modal-delete-btn');
+  if (_delBtn) {
+    _delBtn.style.display = '';
+    _delBtn.onclick = function(){ deleteRecord(workCode); };
+  }
   $('modal-overlay').classList.add('open');
   document.body.style.overflow='hidden';
 }
@@ -1396,6 +1403,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     SPOTIFY_ONLY = coreData.unmatched_spotify || [];
     RAW.forEach(r => { const ed = _edits[r.work_code_raw]; if (ed) Object.assign(r, ed); });
     _newRecs.forEach(r => { RAW.push(Object.assign({}, r, {_manual: true})); });
+    RAW = RAW.filter(r => !r._deleted);
     RAW_MAP = {};
     RAW.forEach(r => { RAW_MAP[r.work_code_raw] = r; });
     SPO_MAP = {};
@@ -1494,6 +1502,25 @@ async function saveNewRecord(record) {
     }catch(e){showToast('Sync failed: '+e.message,'err');console.warn('GAS sync:',e);}
   } else {
     showToast('Track added locally \u2713','ok');
+  }
+}
+async function deleteRecord(workCode) {
+  if(!confirm('Hide "'+workCode+'" from the dashboard? (Can be restored by removing the _deleted flag in the spreadsheet)')) return;
+  // Save locally
+  const ov=getLocalOverlay();
+  ov.edits[workCode]=Object.assign(ov.edits[workCode]||{},{_deleted:true});
+  setLocalOverlay(ov);
+  // Remove from in-memory arrays
+  const idx=RAW.findIndex(r=>r.work_code_raw===workCode);
+  if(idx>=0) RAW.splice(idx,1);
+  delete RAW_MAP[workCode];
+  AGG=buildAGG(); filtered=AGG.works.slice(); applyFilters();
+  closeModalBtn();
+  showToast('Record hidden \u2713','ok');
+  // Sync to GAS
+  if(getGASUrl()){
+    try{ await gasPost({action:'edit',work_code_raw:workCode,data:{_deleted:true}}); }
+    catch(e){ console.warn('GAS delete sync:',e); }
   }
 }
 let _toastTimer;
