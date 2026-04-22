@@ -1519,22 +1519,22 @@ function clearGASUrl(){
   localStorage.removeItem(GAS_URL_KEY);
   document.getElementById('gas-url').value='';
   const st=document.getElementById('gas-status');
-  if(st){st.textContent='URL cleared.';st.className='pat-status pat-err';st.style.display='';}
+  if(st){st.textContent='URL cleared.';st.className='pat-status pat-err';st.style.display='block';}
   updateEditButtons();
 }
 async function testGASConnection(){
   const url=document.getElementById('gas-url').value.trim();
   const st=document.getElementById('gas-status');
   if(!st)return;
-  if(!url){st.textContent='Enter a URL first.';st.className='pat-status pat-err';st.style.display='';return;}
-  st.textContent='Testing\u2026';st.className='pat-status';st.style.display='';
+  if(!url){st.textContent='Enter a URL first.';st.className='pat-status pat-err';st.style.display='block';return;}
+  st.textContent='Testing\u2026';st.className='pat-status';st.style.display='block';
   try{
     const res=await fetch(url+'?action=ping');
     const data=await res.json();
     if(data.ok){st.textContent='\u2713 Connected';st.className='pat-status pat-ok';}
     else{st.textContent='\u2717 Unexpected response';st.className='pat-status pat-err';}
   }catch(e){st.textContent='\u2717 '+e.message;st.className='pat-status pat-err';}
-  st.style.display='';
+  st.style.display='block';
 }
 function updateEditButtons(){
   document.querySelectorAll('.edit-toggle-btn').forEach(btn=>{
