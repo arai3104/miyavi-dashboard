@@ -1,0 +1,1650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MIYAVI — JASRAC / J-WID Rights Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous">
+// ════════════════════════════════════════
+// OVERLAY / GITHUB API
+// ════════════════════════════════════════
+const GH_PAT_KEY='miyavi_gh_pat', GH_OWNER_KEY='miyavi_gh_owner', GH_REPO_KEY='miyavi_gh_repo';
+let _currentModalWorkCode='';
+function getGHPat()   { return localStorage.getItem(GH_PAT_KEY)||''; }
+function getGHOwner() { return localStorage.getItem(GH_OWNER_KEY)||''; }
+function getGHRepo()  { return localStorage.getItem(GH_REPO_KEY)||''; }
+function ghHdr() {
+  return {'Authorization':'token '+getGHPat(),'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'};
+}
+async function ghGet(path) {
+  const r=await fetch('https://api.github.com/repos/'+getGHOwner()+'/'+getGHRepo()+'/contents/'+path,{headers:ghHdr()});
+  if(!r.ok) throw new Error('GitHub GET '+r.status+' '+r.statusText);
+  return r.json();
+}
+async function ghPut(path,data,sha,msg) {
+  const enc=btoa(unescape(encodeURIComponent(JSON.stringify(data,null,2)+'\n')));
+  const r=await fetch('https://api.github.com/repos/'+getGHOwner()+'/'+getGHRepo()+'/contents/'+path,
+    {method:'PUT',headers:ghHdr(),body:JSON.stringify({message:msg||'Update overlay',content:enc,sha:sha})});
+  if(!r.ok){const e=await r.json().catch(()=>({})); throw new Error(e.message||'GitHub PUT '+r.status);}
+  return r.json();
+}
+async function saveOverlayEdit(workCode,data) {
+  if(!getGHPat()){showToast('No GitHub token \u2014 open \u2699 Settings','err');return;}
+  if(!getGHOwner()||!getGHRepo()){showToast('Set GitHub owner/repo in Settings','err');return;}
+  try {
+    showToast('Saving\u2026');
+    const file=await ghGet('overlay.json');
+    const ov=JSON.parse(atob(file.content.replace(/\n/g,'')));
+    ov.edits=ov.edits||{};
+    ov.edits[workCode]=Object.assign(ov.edits[workCode]||{},data);
+    await ghPut('overlay.json',ov,file.sha,'Update rights: '+workCode);
+    const r=RAW_MAP[workCode]; if(r) Object.assign(r,data);
+    showToast('Saved \u2713','ok');
+  } catch(e){showToast('Save failed: '+e.message,'err');console.error(e);}
+}
+async function saveNewRecord(record) {
+  if(!getGHPat()){showToast('No GitHub token \u2014 open \u2699 Settings','err');return;}
+  if(!getGHOwner()||!getGHRepo()){showToast('Set GitHub owner/repo in Settings','err');return;}
+  try {
+    showToast('Saving\u2026');
+    const file=await ghGet('overlay.json');
+    const ov=JSON.parse(atob(file.content.replace(/\n/g,'')));
+    ov.new_records=ov.new_records||[];
+    record._manual=true; record._created=new Date().toISOString();
+    ov.new_records.push(record);
+    await ghPut('overlay.json',ov,file.sha,'Add track: '+record.title);
+    RAW.push(record); RAW_MAP[record.work_code_raw]=record;
+    AGG=buildAGG(); filtered=AGG.works.slice(); applyFilters();
+    showToast('Track added \u2713','ok');
+  } catch(e){showToast('Save failed: '+e.message,'err');console.error(e);}
+}
+// Toast
+let _toastTimer;
+function showToast(msg,type) {
+  const el=document.getElementById('toast-el'); if(!el) return;
+  el.textContent=msg; el.className='toast show'+(type?' '+type:'');
+  clearTimeout(_toastTimer);
+  if(type) _toastTimer=setTimeout(()=>{el.className='toast';},3200);
+}
+// Loading
+function showLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.remove('hidden');}
+function hideLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.add('hidden');}
+// Settings modal
+function openSettingsModal(){
+  document.getElementById('gh-owner').value=getGHOwner();
+  document.getElementById('gh-repo').value=getGHRepo();
+  document.getElementById('gh-pat').value=getGHPat();
+  const st=document.getElementById('pat-status'); if(st) st.style.display='none';
+  document.getElementById('settings-modal').classList.remove('hidden');
+}
+function closeSettingsModal(){document.getElementById('settings-modal').classList.add('hidden');}
+function saveSettings(){
+  const owner=document.getElementById('gh-owner').value.trim();
+  const repo=document.getElementById('gh-repo').value.trim();
+  const pat=document.getElementById('gh-pat').value.trim();
+  if(owner)localStorage.setItem(GH_OWNER_KEY,owner);
+  if(repo)localStorage.setItem(GH_REPO_KEY,repo);
+  if(pat)localStorage.setItem(GH_PAT_KEY,pat);
+  closeSettingsModal(); updateEditButtons(); showToast('Settings saved \u2713','ok');
+}
+function clearGHPat(){
+  localStorage.removeItem(GH_PAT_KEY);
+  document.getElementById('gh-pat').value='';
+  const st=document.getElementById('pat-status');
+  if(st){st.textContent='Token cleared.';st.className='pat-status pat-err';st.style.display='';}
+  updateEditButtons();
+}
+async function testGHConnection(){
+  const pat=document.getElementById('gh-pat').value.trim();
+  const st=document.getElementById('pat-status');
+  if(!st)return;
+  if(!pat){st.textContent='Enter a PAT first.';st.className='pat-status pat-err';st.style.display='';return;}
+  st.textContent='Testing\u2026';st.className='pat-status';st.style.display='';
+  try{
+    const res=await fetch('https://api.github.com/user',{headers:{'Authorization':'token '+pat,'Accept':'application/vnd.github.v3+json'}});
+    const data=await res.json();
+    if(data.login){st.textContent='\u2713 Connected as '+data.login;st.className='pat-status pat-ok';}
+    else{st.textContent='\u2717 Invalid token';st.className='pat-status pat-err';}
+  }catch(e){st.textContent='\u2717 '+e.message;st.className='pat-status pat-err';}
+  st.style.display='';
+}
+function updateEditButtons(){
+  const hasPat=!!getGHPat();
+  document.querySelectorAll('.edit-toggle-btn').forEach(btn=>{
+    btn.classList.toggle('disabled',!hasPat);
+    btn.title=hasPat?'Edit this track':'Set a GitHub token in Settings to enable editing';
+  });
+}
+// Add Record modal
+function openAddRecordModal(){
+  if(!getGHPat()){showToast('Set a GitHub token in Settings (\u2699) first.','err');openSettingsModal();return;}
+  ['nr-title','nr-work-code','nr-artist','nr-release','nr-iswc','nr-master-rh','nr-advance','nr-territory','nr-notes']
+    .forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['nr-source','nr-contract-status'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['nr-license-start','nr-license-end'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('add-record-modal').classList.remove('hidden');
+}
+function closeAddRecordModal(){document.getElementById('add-record-modal').classList.add('hidden');}
+async function submitNewRecord(){
+  const title=document.getElementById('nr-title').value.trim();
+  if(!title){alert('Title is required.');return;}
+  const wc=document.getElementById('nr-work-code').value.trim()||('manual-'+Date.now());
+  const record={
+    track_number:'',work_code_raw:wc,work_code:wc.replace(/-/g,''),title:title,
+    primary_artist:document.getElementById('nr-artist').value.trim(),
+    release_period:document.getElementById('nr-release').value.trim(),
+    source_type:document.getElementById('nr-source').value,
+    iswc_csv:document.getElementById('nr-iswc').value.trim(),
+    iswc_jwid:document.getElementById('nr-iswc').value.trim(),
+    status:'Manual',chui_sakuhin:'',rights_holders:[],dist_holds:[],titles:[],alt_titles:[],
+    master_rh:document.getElementById('nr-master-rh').value.trim(),
+    master_license_start:document.getElementById('nr-license-start').value,
+    master_license_end:document.getElementById('nr-license-end').value,
+    advance_amount:document.getElementById('nr-advance').value.trim(),
+    territory:document.getElementById('nr-territory').value.trim(),
+    contract_status:document.getElementById('nr-contract-status').value,
+    internal_notes:document.getElementById('nr-notes').value.trim(),
+    _manual:true,
+  };
+  closeAddRecordModal();
+  await saveNewRecord(record);
+}
+// Edit form in modal
+function renderEditForm(workCode){
+  const r=RAW_MAP[workCode]||{};
+  const cs=r.contract_status||'';
+  return '<div class="edit-section" id="ef-block"><h4>Edit Master &amp; Rights Info</h4>'+
+    '<div class="edit-form-grid">'+
+    '<div class="ef-group"><label>Master Right Holder</label><input type="text" id="ef-master-rh" value="'+esc(r.master_rh||'')+'" placeholder="Label / company"></div>'+
+    '<div class="ef-group"><label>Contract Status</label><select id="ef-contract-status">'+
+      '<option value="">\u2014 select \u2014</option>'+
+      '<option value="Active"'+(cs==='Active'?' selected':'')+'>Active</option>'+
+      '<option value="Expired"'+(cs==='Expired'?' selected':'')+'>Expired</option>'+
+      '<option value="Pending"'+(cs==='Pending'?' selected':'')+'>Pending</option>'+
+    '</select></div>'+
+    '<div class="ef-group"><label>License Start</label><input type="date" id="ef-license-start" value="'+esc(r.master_license_start||'')+'"></div>'+
+    '<div class="ef-group"><label>License End</label><input type="date" id="ef-license-end" value="'+esc(r.master_license_end||'')+'"></div>'+
+    '<div class="ef-group"><label>Advance Amount</label><input type="text" id="ef-advance" value="'+esc(r.advance_amount||'')+'" placeholder="e.g. \xa5500,000"></div>'+
+    '<div class="ef-group"><label>Territory</label><input type="text" id="ef-territory" value="'+esc(r.territory||'')+'" placeholder="e.g. WW, JP"></div>'+
+    '<div class="ef-group full"><label>Internal Notes</label><textarea id="ef-internal-notes" placeholder="Team notes\u2026">'+esc(r.internal_notes||'')+'</textarea></div>'+
+    '</div><div class="ef-save-row">'+
+    '<button class="btn-ef-cancel" onclick="hideEditForm()">Cancel</button>'+
+    '<button class="btn-ef-save" onclick="doSaveEdit(\''+workCode.replace(/\\/g,'\\\\').replace(/'/g,"\\'")+'\')">Save Changes</button>'+
+    '</div></div>';
+}
+function showEditForm(workCode){
+  if(!getGHPat()){showToast('Set a GitHub token in Settings (\u2699) first.','err');return;}
+  const ex=document.getElementById('ef-block');
+  if(ex){ex.style.display=ex.style.display==='none'?'':'none';return;}
+  const body=document.getElementById('modal-body');
+  body.insertAdjacentHTML('beforeend',renderEditForm(workCode));
+  body.scrollTop=body.scrollHeight;
+}
+function hideEditForm(){const el=document.getElementById('ef-block');if(el)el.style.display='none';}
+async function doSaveEdit(workCode){
+  const g=id=>{const el=document.getElementById(id);return el?el.value.trim():'';};
+  const data={
+    master_rh:g('ef-master-rh'),master_license_start:g('ef-license-start'),
+    master_license_end:g('ef-license-end'),advance_amount:g('ef-advance'),
+    territory:g('ef-territory'),contract_status:g('ef-contract-status'),
+    internal_notes:(document.getElementById('ef-internal-notes')||{}).value||'',
+  };
+  hideEditForm();
+  await saveOverlayEdit(workCode,data);
+  openModal(workCode);
+}
+// Master rights display
+function renderMasterRightsSection(r){
+  if(!r) return '';
+  const fields=[['Master Right Holder',r.master_rh],['License Start',r.master_license_start],
+    ['License End',r.master_license_end],['Advance Amount',r.advance_amount],['Territory',r.territory]];
+  const filled=fields.filter(([,v])=>v&&String(v).trim());
+  if(!filled.length&&!r.contract_status&&!r.internal_notes) return '';
+  let html='<div class="msec"><div class="msec-title">Master Recording Rights</div>';
+  if(filled.length||r.contract_status){
+    html+='<div class="master-rights-grid">';
+    filled.forEach(([l,v])=>{ html+='<div class="meta-item"><div class="meta-lbl">'+esc(l)+'</div><div class="meta-val">'+esc(v)+'</div></div>'; });
+    if(r.contract_status){
+      const cs=r.contract_status;
+      const cls=cs==='Active'?'status-active':cs==='Expired'?'status-expired':'status-pending';
+      html+='<div class="meta-item"><div class="meta-lbl">Contract Status</div><div class="meta-val"><span class="status-pill '+cls+'">'+esc(cs)+'</span></div></div>';
+    }
+    html+='</div>';
+  }
+  if(r.internal_notes) html+='<div style="margin-top:10px;"><div class="meta-lbl">Internal Notes</div><div style="font-size:12px;margin-top:4px;white-space:pre-wrap;color:var(--text);">'+esc(r.internal_notes)+'</div></div>';
+  return html+'</div>';
+}
+
+</script>
+<style>
+:root{
+  --bg:#f0f2f5;--card:#fff;--header:#0f172a;--accent:#6366f1;
+  --text:#1e293b;--muted:#64748b;--border:#e2e8f0;
+  --ok:#10b981;--warn:#f59e0b;--danger:#ef4444;
+  --gap:16px;--r:10px;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.5;font-size:14px;}
+.wrap{max-width:1440px;margin:0 auto;padding:var(--gap);}
+
+/* Header */
+.hdr{background:var(--header);color:#fff;padding:18px 24px;border-radius:var(--r);margin-bottom:var(--gap);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;}
+.hdr h1{font-size:18px;font-weight:700;letter-spacing:-.3px;}
+.hdr h1 span{color:#a5b4fc;}
+.hdr-sub{font-size:11px;color:rgba(255,255,255,.5);margin-top:3px;}
+.filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.fg{display:flex;align-items:center;gap:5px;}
+.fg label{font-size:11px;color:rgba(255,255,255,.65);white-space:nowrap;}
+.fg select,.fg input[type=text]{padding:5px 9px;border:1px solid rgba(255,255,255,.2);border-radius:5px;background:rgba(255,255,255,.1);color:#fff;font-size:12px;min-width:100px;}
+.fg select option{background:#1e293b;color:#fff;}
+.ms-wrap{position:relative;}
+.ms-trigger{cursor:pointer;padding:5px 9px;border:1px solid rgba(255,255,255,.2);border-radius:5px;background:rgba(255,255,255,.1);color:#fff;font-size:12px;min-width:110px;display:flex;justify-content:space-between;align-items:center;gap:6px;user-select:none;}
+.ms-trigger:hover{background:rgba(255,255,255,.18);}
+.ms-trigger .ms-lbl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ms-arrow{font-size:9px;opacity:.7;transition:transform .15s;}
+.ms-wrap.open .ms-arrow{transform:rotate(180deg);}
+.ms-drop{display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:999;background:#1e293b;border:1px solid rgba(255,255,255,.25);border-radius:6px;min-width:140px;max-height:220px;overflow-y:auto;box-shadow:0 6px 20px rgba(0,0,0,.4);padding:4px 0;}
+.ms-wrap.open .ms-drop{display:block;}
+.ms-opt{display:flex;align-items:center;gap:7px;padding:5px 11px;cursor:pointer;font-size:12px;color:#e2e8f0;}
+.ms-opt:hover{background:rgba(255,255,255,.09);}
+.ms-opt input[type=checkbox]{accent-color:#818cf8;width:13px;height:13px;cursor:pointer;}
+.ms-footer{border-top:1px solid rgba(255,255,255,.1);padding:5px 11px;font-size:11px;color:#94a3b8;cursor:pointer;text-align:right;}
+.ms-footer:hover{color:#c7d2fe;}
+.ms-active .ms-trigger{border-color:#818cf8;background:rgba(129,140,248,.15);}
+.btn-reset{padding:5px 12px;border:1px solid rgba(255,255,255,.3);border-radius:5px;background:transparent;color:#fff;font-size:12px;cursor:pointer;}
+.btn-reset:hover{background:rgba(255,255,255,.1);}
+.note-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.btn-note-export{padding:5px 12px;border:1px solid rgba(253,230,138,.5);border-radius:5px;background:rgba(253,230,138,.1);color:#fde68a;font-size:12px;cursor:pointer;font-weight:500;}
+.btn-note-export:hover{background:rgba(253,230,138,.2);}
+.btn-note-import{padding:5px 12px;border:1px solid rgba(129,140,248,.4);border-radius:5px;background:rgba(129,140,248,.1);color:#a5b4fc;font-size:12px;cursor:pointer;font-weight:500;}
+.btn-note-import:hover{background:rgba(129,140,248,.2);}
+.note-count-badge{font-size:11px;color:#94a3b8;padding:3px 8px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);}
+
+/* Tabs */
+.tabs{display:flex;gap:4px;margin-bottom:var(--gap);}
+.tab{padding:7px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);background:transparent;border:none;}
+.tab.active{background:var(--card);color:var(--accent);box-shadow:0 1px 3px rgba(0,0,0,.1);}
+.tab-panel{display:none;}
+.tab-panel.active{display:block;}
+
+/* KPIs */
+.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:var(--gap);margin-bottom:var(--gap);}
+.kpi{background:var(--card);border-radius:var(--r);padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,.07);border-left:3px solid var(--accent);}
+.kpi.ok{border-left-color:var(--ok);}
+.kpi.warn{border-left-color:var(--warn);}
+.kpi.danger{border-left-color:var(--danger);}
+.kpi-lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;}
+.kpi-val{font-size:30px;font-weight:700;line-height:1.1;}
+.kpi-sub{font-size:11px;color:var(--muted);margin-top:3px;}
+
+/* Charts */
+.chart-row{display:grid;gap:var(--gap);margin-bottom:var(--gap);}
+.r2{grid-template-columns:repeat(auto-fit,minmax(380px,1fr));}
+.r3{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));}
+.cb{background:var(--card);border-radius:var(--r);padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,.07);}
+.cb h3{font-size:13px;font-weight:600;margin-bottom:14px;}
+.cb h3 small{font-size:11px;color:var(--muted);font-weight:400;margin-left:6px;}
+.cb canvas{max-height:280px;}
+.cb.tall canvas{max-height:360px;}
+
+/* Table section */
+.tbl-wrap{background:var(--card);border-radius:var(--r);padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,.07);}
+.tbl-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
+.tbl-hdr h3{font-size:13px;font-weight:600;}
+.tbl-search input{padding:5px 10px;border:1px solid var(--border);border-radius:5px;font-size:12px;width:240px;}
+.tbl-pager{font-size:12px;color:var(--muted);margin-top:10px;display:flex;justify-content:space-between;align-items:center;}
+.tbl-pager button{padding:4px 10px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer;font-size:12px;}
+.tbl-pager button:disabled{opacity:.4;cursor:default;}
+.data-table{width:100%;border-collapse:collapse;font-size:12px;}
+.data-table th{text-align:left;padding:8px 10px;border-bottom:2px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;cursor:pointer;user-select:none;}
+.data-table th:hover{color:var(--text);}
+.data-table td{padding:8px 10px;border-bottom:1px solid #f1f5f9;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;}
+.data-table tr.clickable{cursor:pointer;}
+.data-table tr.clickable:hover td{background:#f0f4ff;}
+.data-table tr:last-child td{border-bottom:none;}
+.tbl-scroll{overflow-x:auto;}
+
+/* Badges */
+.badge-spo{display:inline-flex;align-items:center;gap:3px;font-size:10px;padding:2px 6px;border-radius:10px;background:#1DB95422;color:#1DB954;border:1px solid #1DB95444;font-weight:600;white-space:nowrap;}
+.badge-jwid{display:inline-flex;align-items:center;gap:3px;font-size:10px;padding:2px 6px;border-radius:10px;background:rgba(156,163,175,.15);color:#6b7280;border:1px solid rgba(156,163,175,.35);font-weight:600;white-space:nowrap;}
+.badge-note{display:inline-flex;align-items:center;font-size:10px;padding:1px 5px;border-radius:8px;background:#fef9c3;color:#854d0e;border:1px solid #fde68a;margin-left:4px;line-height:1.4;}
+.note-section{margin-top:16px;border-top:1px solid rgba(255,255,255,.1);padding-top:14px;}
+.note-section label{display:block;font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;}
+.note-textarea{width:100%;box-sizing:border-box;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.18);border-radius:6px;color:#e2e8f0;font-size:13px;font-family:inherit;padding:9px 11px;resize:vertical;min-height:80px;outline:none;transition:border-color .15s;}
+.note-textarea:focus{border-color:#818cf8;}
+.note-save-row{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:6px;}
+.note-save-btn{background:#818cf8;color:#fff;border:none;border-radius:5px;padding:5px 16px;font-size:12px;font-weight:600;cursor:pointer;}
+.note-save-btn:hover{background:#6366f1;}
+.note-saved-msg{font-size:11px;color:#86efac;opacity:0;transition:opacity .3s;}
+.tr-spo td{background:#f6fef9 !important;color:#374151;}
+.tr-spo td:first-child{font-style:italic;}
+.badge{display:inline-block;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:600;}
+.badge.pj{background:#ede9fe;color:#7c3aed;}
+.badge.po{background:#fef3c7;color:#b45309;}
+.badge.pw{background:#d1fae5;color:#065f46;}
+.badge.pe{background:#dbeafe;color:#1d4ed8;}
+.badge.other{background:#f1f5f9;color:#475569;}
+.badge.hold{background:#fee2e2;color:#991b1b;}
+.badge.chui{background:#fff7ed;color:#c2410c;}
+.badge.trust{background:#d1fae5;color:#065f46;}
+.badge.notrust{background:#f1f5f9;color:#64748b;}
+.badge.partial{background:#fef9c3;color:#854d0e;}
+.click-hint{font-size:11px;color:var(--muted);margin-top:6px;}
+.click-hint kbd{background:#f1f5f9;border:1px solid #d1d5db;border-radius:3px;padding:1px 5px;font-size:10px;}
+
+/* ===================== MODAL ===================== */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;align-items:center;justify-content:flex-end;}
+.modal-overlay.open{display:flex;}
+.modal{background:#fff;width:min(700px,95vw);height:100vh;overflow-y:auto;box-shadow:-8px 0 40px rgba(0,0,0,.2);display:flex;flex-direction:column;}
+.modal-hdr{background:var(--header);color:#fff;padding:20px 24px;position:sticky;top:0;z-index:10;}
+.modal-hdr-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.modal-title{font-size:17px;font-weight:700;line-height:1.3;flex:1;}
+.modal-close{background:none;border:none;color:rgba(255,255,255,.7);font-size:22px;cursor:pointer;line-height:1;padding:2px 6px;border-radius:4px;}
+.modal-close:hover{color:#fff;background:rgba(255,255,255,.15);}
+.modal-sub{margin-top:6px;font-size:11px;color:rgba(255,255,255,.55);display:flex;flex-wrap:wrap;gap:10px;}
+.modal-body{padding:20px 24px;flex:1;}
+
+/* Modal sections */
+.msec{margin-bottom:20px;}
+.msec-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;}
+.meta-item{display:flex;flex-direction:column;}
+.meta-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px;}
+.meta-val{font-size:13px;font-weight:500;word-break:break-all;}
+
+/* Rights holders table */
+.rh-table{width:100%;border-collapse:collapse;font-size:11.5px;}
+.rh-table th{text-align:left;padding:6px 8px;background:#f8fafc;border-bottom:2px solid var(--border);color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;}
+.rh-table td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top;}
+.rh-table tr:last-child td{border-bottom:none;}
+.rh-table tr.miyavi-row td{background:#f0f4ff;}
+.rh-name{font-weight:600;}
+.rh-id{font-size:10px;color:var(--muted);font-family:monospace;}
+.splits-mini{display:flex;flex-wrap:wrap;gap:3px;margin-top:3px;}
+.split-chip{background:#f1f5f9;border-radius:4px;padding:2px 5px;font-size:10px;color:var(--text);}
+.split-chip.has-val{background:#ede9fe;color:#4c1d95;}
+
+/* Holds detail */
+.holds-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;}
+.hold-cell{background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:6px 8px;}
+.hold-cell.empty{background:#f1f5f9;border-color:#e2e8f0;}
+.hold-type{font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;margin-bottom:2px;}
+.hold-vals{font-size:12px;}
+.hold-flag{display:inline-block;padding:1px 5px;border-radius:3px;font-weight:700;font-size:11px;}
+.hold-flag.mi{background:#fee2e2;color:#991b1b;}
+.hold-flag.ok{background:#d1fae5;color:#065f46;}
+.hold-flag.dash{color:var(--muted);}
+
+/* Titles list */
+.title-list{list-style:none;}
+.title-list li{padding:4px 0;border-bottom:1px solid #f1f5f9;font-size:12px;display:flex;gap:8px;}
+.title-list li:last-child{border-bottom:none;}
+.title-type{font-size:10px;background:#f1f5f9;border-radius:3px;padding:1px 6px;color:var(--muted);white-space:nowrap;align-self:flex-start;margin-top:2px;}
+
+.no-data{color:var(--muted);font-size:12px;padding:8px 0;}
+.footer{text-align:center;font-size:11px;color:var(--muted);padding:16px;margin-top:8px;}
+
+@media(max-width:768px){
+  .hdr{flex-direction:column;align-items:flex-start;}
+  .kpi-row{grid-template-columns:repeat(2,1fr);}
+  .r2,.r3{grid-template-columns:1fr;}
+  .modal{width:100vw;}
+  .meta-grid{grid-template-columns:1fr;}
+}
+
+
+/* UMP Contract data */
+.ump-badge{display:inline-block;background:#7c3aed;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:12px;letter-spacing:.5px;vertical-align:middle;margin-left:6px;}
+.ump-writers-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}
+.ump-writers-table th{background:#f5f3ff;color:#5b21b6;font-weight:600;padding:6px 10px;text-align:left;border-bottom:2px solid #ddd6fe;}
+.ump-writers-table td{padding:6px 10px;border-bottom:1px solid #f0f0f0;vertical-align:top;}
+.ump-writers-table tr:last-child td{border-bottom:none;}
+.ump-writers-table .share-pill{display:inline-block;background:#ede9fe;color:#5b21b6;font-weight:700;padding:1px 7px;border-radius:10px;font-size:11px;}
+.ump-writers-table .take-pill{display:inline-block;background:#dcfce7;color:#166534;font-weight:700;padding:1px 7px;border-radius:10px;font-size:11px;}
+.ump-publishers-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}
+.ump-publishers-table th{background:#fef3c7;color:#92400e;font-weight:600;padding:6px 10px;text-align:left;border-bottom:2px solid #fde68a;}
+.ump-publishers-table td{padding:6px 10px;border-bottom:1px solid #f0f0f0;}
+.ump-publishers-table tr:last-child td{border-bottom:none;}
+.ump-publishers-table .pub-share{font-weight:700;color:#b45309;}
+.ump-meta-row{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:12px;color:var(--muted);}
+.ump-meta-row span{background:#f5f3ff;border-radius:4px;padding:3px 8px;color:#5b21b6;}
+
+
+/* Spotify embed */
+.spotify-embed-wrap { margin: 10px 0; }
+.spotify-list { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+.spotify-row { background:#f9f9f9; border:1px solid #e8e8e8; border-radius:6px; padding:8px 10px; }
+.spotify-row-info { display:flex; align-items:flex-start; gap:8px; }
+.spotify-link { font-size:20px; color:#1DB954; text-decoration:none; line-height:1.4; flex-shrink:0; }
+.spotify-track { font-size:13px; font-weight:600; color:#111; }
+.spotify-meta { font-size:11px; color:#666; margin-top:1px; }
+.spotify-badge { background:#1DB954; color:#fff; font-size:9px; font-weight:700; padding:2px 6px; border-radius:10px; vertical-align:middle; margin-left:6px; letter-spacing:.5px; }
+.match-exact { background:#d1fae5; color:#065f46; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; margin-left:4px; }
+.match-fuzzy { background:#fef3c7; color:#92400e; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; margin-left:4px; }
+
+/* BMG section */
+.bmg-badge { background:#c0392b; color:#fff; font-size:9px; font-weight:700; padding:2px 6px; border-radius:10px; vertical-align:middle; margin-left:6px; letter-spacing:.5px; }
+.bmg-chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+.bmg-chip { background:#fdf2f2; border:1px solid #fecaca; color:#991b1b; font-size:11px; padding:3px 8px; border-radius:10px; }
+.bmg-field { margin-bottom:10px; }
+.bmg-field-lbl { font-size:11px; font-weight:700; color:#7f1d1d; text-transform:uppercase; letter-spacing:.5px; margin-bottom:3px; }
+.bmg-field-val { font-size:12px; color:#333; white-space:pre-wrap; background:#fafafa; border:1px solid #eee; border-radius:4px; padding:8px; margin:0; font-family:inherit; line-height:1.6; }
+.bmg-expand { background:none; border:none; color:#c0392b; font-size:11px; cursor:pointer; padding:2px 0; }
+.bmg-expand:hover { text-decoration:underline; }
+
+/* Hold chips */
+.hold-chip { display:inline-block; font-size:10px; padding:2px 5px; border-radius:4px; margin:2px; background:#f3f4f6; border:1px solid #e5e7eb; white-space:nowrap; }
+.hold-red    { background:#fee2e2; border-color:#fca5a5; color:#991b1b; }
+.hold-orange { background:#fef3c7; border-color:#fde68a; color:#92400e; }
+
+
+/* ---- Tags ---- */
+.badge-cover{display:inline-block;background:#fff3e0;color:#e65100;border:1px solid #ffcc80;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:600;margin-left:4px;vertical-align:middle;}
+.badge-ext{display:inline-block;background:#f3e5f5;color:#6a1b9a;border:1px solid #ce93d8;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:600;margin-left:4px;vertical-align:middle;}
+.tag-section{margin-top:10px;padding:11px 14px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;}
+.tag-section label{display:block;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px;}
+.tag-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 13px;border-radius:20px;border:1.5px solid #e2e8f0;background:#fff;color:#64748b;font-size:12px;cursor:pointer;transition:all .15s;font-family:inherit;}
+.tag-btn:hover{border-color:#94a3b8;background:#f1f5f9;color:#334155;}
+.tag-btn.active-cover{background:#fff3e0;border-color:#ff9800;color:#e65100;font-weight:600;}
+.tag-btn.active-ext{background:#f3e5f5;border-color:#9c27b0;color:#6a1b9a;font-weight:600;}
+.tag-btn.tag-clear{font-size:11px;color:#94a3b8;border-color:#e9ecef;margin-left:6px;padding:4px 10px;}
+.tag-btn.tag-clear:hover{color:#ef4444;border-color:#ef4444;}
+
+.loading-overlay{position:fixed;inset:0;background:rgba(15,23,42,.88);display:flex;align-items:center;justify-content:center;z-index:9999;flex-direction:column;gap:14px;}
+.loading-overlay.hidden{display:none;}
+.spinner{width:38px;height:38px;border:4px solid rgba(255,255,255,.15);border-top-color:#6366f1;border-radius:50%;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.loading-text{color:rgba(255,255,255,.75);font-size:13px;}
+.toast{position:fixed;bottom:24px;right:24px;background:#1e293b;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;box-shadow:0 4px 20px rgba(0,0,0,.45);z-index:9998;transform:translateY(10px);opacity:0;transition:all .22s;pointer-events:none;border-left:3px solid transparent;}
+.toast.show{transform:translateY(0);opacity:1;}
+.toast.ok{border-left-color:#10b981;}.toast.err{border-left-color:#ef4444;}
+.overlay-modal{position:fixed;inset:0;background:rgba(15,23,42,.65);z-index:9000;display:flex;align-items:center;justify-content:center;}
+.overlay-modal.hidden{display:none;}
+.om-card{background:#fff;border-radius:12px;padding:28px 32px;width:560px;max-width:95vw;max-height:88vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.4);}
+.om-card h2{font-size:16px;font-weight:700;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;color:var(--text);}
+.om-card h2 button{background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1;}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
+.form-row.full{grid-template-columns:1fr;}
+.form-group{display:flex;flex-direction:column;gap:4px;}
+.form-group label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;}
+.form-group input,.form-group select,.form-group textarea{padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;color:var(--text);background:#fff;}
+.form-group textarea{resize:vertical;min-height:72px;}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,.15);}
+.om-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border);}
+.om-divider{border:none;border-top:1px solid var(--border);margin:14px 0;}
+.om-section-lbl{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;}
+.btn-primary{padding:8px 20px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;}
+.btn-primary:hover{background:#4f46e5;}
+.btn-secondary{padding:8px 16px;background:#fff;color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;}
+.btn-secondary:hover{background:#f8fafc;}
+.pat-status{font-size:12px;padding:4px 9px;border-radius:4px;margin-top:6px;display:none;}
+.pat-ok{background:#d1fae5;color:#065f46;}.pat-err{background:#fee2e2;color:#991b1b;}
+.edit-section{margin-top:16px;border-top:1px solid rgba(255,255,255,.12);padding-top:14px;}
+.edit-section h4{font-size:11px;font-weight:700;color:#a5b4fc;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;}
+.edit-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.ef-group{display:flex;flex-direction:column;gap:3px;}
+.ef-group.full{grid-column:1/-1;}
+.ef-group label{font-size:10px;font-weight:600;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.4px;}
+.ef-group input,.ef-group select,.ef-group textarea{padding:6px 9px;border:1px solid rgba(255,255,255,.15);border-radius:5px;background:rgba(255,255,255,.09);color:#e2e8f0;font-size:12px;font-family:inherit;}
+.ef-group textarea{resize:vertical;min-height:60px;}
+.ef-group select option{background:#1e293b;color:#fff;}
+.ef-save-row{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;}
+.btn-ef-save{padding:6px 18px;background:#6366f1;color:#fff;border:none;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;}
+.btn-ef-save:hover{background:#4f46e5;}
+.btn-ef-cancel{padding:6px 14px;background:transparent;color:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.2);border-radius:5px;font-size:12px;cursor:pointer;}
+.btn-ef-cancel:hover{color:#fff;}
+.edit-toggle-btn{padding:4px 12px;border:1px solid rgba(129,140,248,.55);border-radius:5px;background:rgba(99,102,241,.15);color:#a5b4fc;font-size:11px;cursor:pointer;font-weight:600;transition:background .15s;}
+.edit-toggle-btn:hover{background:rgba(99,102,241,.28);}
+.edit-toggle-btn.disabled{opacity:.4;cursor:not-allowed;}
+.master-rights-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;}
+.master-rights-grid .meta-item{display:flex;flex-direction:column;gap:2px;}
+.status-pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;}
+.status-active{background:#d1fae5;color:#065f46;}.status-expired{background:#fee2e2;color:#991b1b;}.status-pending{background:#fef3c7;color:#92400e;}
+.btn-add-track{padding:5px 12px;border:1px solid rgba(16,185,129,.45);border-radius:5px;background:rgba(16,185,129,.12);color:#6ee7b7;font-size:12px;cursor:pointer;font-weight:600;}
+.btn-add-track:hover{background:rgba(16,185,129,.22);}
+.btn-settings{padding:5px 10px;border:1px solid rgba(255,255,255,.2);border-radius:5px;background:rgba(255,255,255,.07);color:rgba(255,255,255,.75);font-size:15px;cursor:pointer;line-height:1;}
+.btn-settings:hover{background:rgba(255,255,255,.15);}
+.badge-manual{display:inline-flex;align-items:center;font-size:10px;padding:2px 6px;border-radius:10px;background:rgba(251,191,36,.15);color:#f59e0b;border:1px solid rgba(251,191,36,.4);font-weight:600;white-space:nowrap;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hdr">
+  <div>
+    <h1>MIYAVI — <span>JASRAC / J-WID</span> Rights Dashboard</h1>
+    <div class="hdr-sub">266 registered works + 24 Spotify-only tracks · J-WID scrape + JASRAC CSV · Click any row for full details</div>
+  </div>
+  <div class="filters">
+    <div class="fg"><label>Year</label>
+      <div class="ms-wrap" id="ms-year"><div class="ms-trigger" onclick="toggleMs('year')"><span class="ms-lbl" id="ms-lbl-year">All Years</span><span class="ms-arrow">▾</span></div><div class="ms-drop" id="ms-drop-year"></div></div>
+    </div>
+    <div class="fg"><label>Source</label>
+      <div class="ms-wrap" id="ms-src"><div class="ms-trigger" onclick="toggleMs('src')"><span class="ms-lbl" id="ms-lbl-src">All Types</span><span class="ms-arrow">▾</span></div><div class="ms-drop" id="ms-drop-src"></div></div>
+    </div>
+    <div class="fg"><label>Trust</label>
+      <div class="ms-wrap" id="ms-trust"><div class="ms-trigger" onclick="toggleMs('trust')"><span class="ms-lbl" id="ms-lbl-trust">All</span><span class="ms-arrow">▾</span></div><div class="ms-drop" id="ms-drop-trust"></div></div>
+    </div>
+    <div class="fg"><label>Holds</label>
+      <select id="f-holds" onchange="applyFilters()">
+        <option value="">All</option><option value="yes">With Holds</option><option value="no">No Holds</option>
+      </select>
+    </div>
+    <div class="fg"><label>Availability</label>
+      <select id="f-spo" onchange="applyFilters()">
+        <option value="">All</option><option value="spotify">♫ Spotify Only</option><option value="jasrac">JASRAC Only</option><option value="cover">🎤 Cover Songs</option><option value="ext">✍️ For Other Artists</option>
+      </select>
+    </div>
+    <div class="fg"><label>Cowriter</label>
+      <div class="ms-wrap" id="ms-cw"><div class="ms-trigger" onclick="toggleMs('cw')"><span class="ms-lbl" id="ms-lbl-cw">All</span><span class="ms-arrow">▾</span></div><div class="ms-drop" id="ms-drop-cw"></div></div>
+    </div>
+    <button class="btn-reset" onclick="resetFilters()">Reset</button>
+    <button class="btn-reset" onclick="showGlossary()" style="border-color:rgba(165,180,252,.5);color:#a5b4fc;">ⓘ Type Codes</button>
+    <button class="btn-add-track" onclick="openAddRecordModal()">+ Add Track</button>
+    <button class="btn-settings" onclick="openSettingsModal()" title="Settings">&#9881;</button>
+  </div>
+</header>
+
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('overview',this)">Overview</button>
+  <button class="tab" onclick="switchTab('rights',this)">Rights & Splits</button>
+  <button class="tab" onclick="switchTab('works',this)">Works Table</button>
+</div>
+
+<!-- TAB: OVERVIEW -->
+<div id="tab-overview" class="tab-panel active">
+  <div class="kpi-row">
+    <div class="kpi"><div class="kpi-lbl">Total Works</div><div class="kpi-val" id="kpi-total">—</div><div class="kpi-sub">JASRAC registered</div></div>
+    <div class="kpi ok"><div class="kpi-lbl">With ISWC</div><div class="kpi-val" id="kpi-iswc">—</div><div class="kpi-sub">International code assigned</div></div>
+    <div class="kpi warn"><div class="kpi-lbl">注意 Works</div><div class="kpi-val" id="kpi-chui">—</div><div class="kpi-sub">Flagged for attention</div></div>
+    <div class="kpi danger"><div class="kpi-lbl">Dist. Holds</div><div class="kpi-val" id="kpi-holds">—</div><div class="kpi-sub">Distribution pending</div></div>
+  </div>
+  <div class="chart-row r2">
+    <div class="cb tall"><h3>Works by Release Year</h3><canvas id="ch-years"></canvas></div>
+    <div class="cb"><h3>Source Type Breakdown <small>work origin</small></h3><canvas id="ch-src"></canvas></div>
+  </div>
+  <div class="chart-row r2">
+    <div class="cb tall"><h3>Top Co-writers <small>by works count</small></h3><canvas id="ch-cowriters"></canvas></div>
+    <div class="cb tall"><h3>Top Publishers <small>出版者 / サブ出版</small></h3><canvas id="ch-pubs"></canvas></div>
+  </div>
+</div>
+  <div class="kpi-row" style="margin-top:0;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
+    <div class="kpi" style="border-left-color:#ff9800;">
+      <div class="kpi-lbl">🎤 Cover Songs</div>
+      <div class="kpi-val" id="kpi-covers">—</div>
+      <div class="kpi-sub">Tagged as covers</div>
+    </div>
+    <div class="kpi" style="border-left-color:#9c27b0;">
+      <div class="kpi-lbl">✍️ For Other Artists</div>
+      <div class="kpi-val" id="kpi-ext">—</div>
+      <div class="kpi-sub">Written for others</div>
+    </div>
+    <div class="kpi" style="border-left-color:#475569;">
+      <div class="kpi-lbl">🏷️ Total Tagged</div>
+      <div class="kpi-val" id="kpi-tagged-total">—</div>
+      <div class="kpi-sub">Across all categories</div>
+    </div>
+  </div>
+
+<!-- TAB: RIGHTS -->
+<div id="tab-rights" class="tab-panel">
+  <div class="kpi-row">
+    <div class="kpi ok"><div class="kpi-lbl">全信託 Works</div><div class="kpi-val" id="kpi-trust-full">—</div><div class="kpi-sub">Full JASRAC trust</div></div>
+    <div class="kpi"><div class="kpi-lbl">Avg Perf Split</div><div class="kpi-val" id="kpi-avg-perf">—</div><div class="kpi-sub">MIYAVI 演奏 pts</div></div>
+    <div class="kpi"><div class="kpi-lbl">Avg Rec Split</div><div class="kpi-val" id="kpi-avg-rec">—</div><div class="kpi-sub">MIYAVI 録音 pts</div></div>
+    <div class="kpi danger"><div class="kpi-lbl">Works w/ Holds</div><div class="kpi-val" id="kpi-holds2">—</div><div class="kpi-sub">未 distribution flags</div></div>
+  </div>
+  <div class="chart-row r2">
+    <div class="cb"><h3>MIYAVI 演奏 Split Distribution <small>performance pts</small></h3><canvas id="ch-perf"></canvas></div>
+    <div class="cb"><h3>Trust Status <small>信託区分</small></h3><canvas id="ch-trust"></canvas></div>
+  </div>
+  <div class="chart-row" style="grid-template-columns:1fr;">
+    <div class="cb">
+      <h3>Works with Distribution Holds (未)</h3>
+      <div id="holds-table"></div>
+    </div>
+  </div>
+</div>
+
+<!-- TAB: WORKS TABLE -->
+<div id="tab-works" class="tab-panel">
+  <div class="tbl-wrap">
+    <div class="tbl-hdr">
+      <h3>All Works <span id="tbl-count" style="font-weight:400;color:var(--muted)"></span></h3>
+      <div class="note-toolbar">
+        <span class="note-count-badge" id="note-count-badge">📝 0 notes</span>
+        <button class="btn-note-export" onclick="exportNotes()" title="Download notes as JSON">⬇ Export Notes</button>
+        <button class="btn-note-import" onclick="$('note-import-input').click()" title="Load notes from JSON">⬆ Import Notes</button>
+        <input type="file" id="note-import-input" accept=".json" style="display:none" onchange="importNotes(this)">
+        <div class="tbl-search"><input type="text" id="tbl-search" placeholder="Search title, work code, ISWC…" oninput="page=0;renderTable()"></div>
+      </div>
+    </div>
+    <p class="click-hint">Click any row to see full rights details &nbsp;<kbd>↵</kbd></p>
+    <div class="tbl-scroll" id="tbl-container"></div>
+    <div class="tbl-pager">
+      <span id="pager-info"></span>
+      <div style="display:flex;gap:6px;">
+        <button id="btn-prev" onclick="changePage(-1)" disabled>← Prev</button>
+        <button id="btn-next" onclick="changePage(1)">Next →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">MIYAVI J-WID Rights Dashboard · JASRAC / J-WID scrape · 2026</div>
+</div>
+
+<!-- ===================== GLOSSARY MODAL ===================== -->
+<div class="modal-overlay" id="glossary-overlay" onclick="if(event.target===this)closeGlossary()" style="align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;max-width:580px;width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+    <div style="background:var(--header);color:#fff;padding:18px 22px;border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:16px;font-weight:700;">J-WID Source Type Glossary</div>
+      <button onclick="closeGlossary()" style="background:none;border:none;color:rgba(255,255,255,.7);font-size:20px;cursor:pointer;padding:2px 6px;border-radius:4px;">✕</button>
+    </div>
+    <div style="padding:20px 22px;">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">The <strong>source type</strong> (出典) indicates how and where a work was registered in J-WID. Codes appear in the work detail header as e.g. <em>外国作品■出典：PJ(サブ出版者作品届)</em>.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="background:#f8fafc;">
+            <th style="padding:8px 10px;text-align:left;border-bottom:2px solid var(--border);width:50px;">Code</th>
+            <th style="padding:8px 10px;text-align:left;border-bottom:2px solid var(--border);width:130px;">Japanese Name</th>
+            <th style="padding:8px 10px;text-align:left;border-bottom:2px solid var(--border);">Meaning</th>
+            <th style="padding:8px 10px;text-align:center;border-bottom:2px solid var(--border);width:70px;">In dataset</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;"><span class="badge pj">PJ</span></td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">サブ出版者作品届</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">Sub-publisher work registration. Foreign work registered in Japan by a local sub-publisher (e.g. Universal Music Publishing Japan).</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;text-align:center;font-weight:600;">126</td></tr>
+          <tr style="background:#fafafa;"><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;"><span class="badge po">PO</span></td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">出版者作品届（洋楽）</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">Publisher work registration, overseas/other. Foreign work registered directly by an overseas publisher without a Japanese sub-publisher.</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;text-align:center;font-weight:600;">104</td></tr>
+          <tr><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;"><span class="badge pw">PW</span></td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">出版者作品届（洋楽標準）</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">Standard Western/foreign work registration. Typically used for works from Western PRO repertoire (ASCAP, BMI, SESAC, PRS, etc.).</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;text-align:center;font-weight:600;">14</td></tr>
+          <tr style="background:#fafafa;"><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;"><span class="badge other">SE</span></td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">サブ出版者届（英語）</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">Sub-publisher entry, English-language repertoire. Similar to PJ but for English-language works with a specific sub-publishing arrangement.</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;text-align:center;font-weight:600;">10</td></tr>
+          <tr><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;"><span class="badge pe">PE</span></td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">出版者作品届（電子）</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">Electronic/digital work registration. Domestic or foreign works registered primarily for digital distribution (streaming, downloads).</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;text-align:center;font-weight:600;">6</td></tr>
+          <tr style="background:#fafafa;"><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;"><span class="badge other">SV</span></td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">サブ出版者届（映像）</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">Sub-publisher entry, video/visual works. Used for works tied to video productions (music video, TV use) with a Japanese sub-publisher.</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;text-align:center;font-weight:600;">4</td></tr>
+          <tr><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;"><span class="badge other">SM</span></td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">サブ出版者届（音楽）</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;">Sub-publisher entry, music category. General music works registered through a sub-publishing deal.</td><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;text-align:center;font-weight:600;">1</td></tr>
+          <tr style="background:#fafafa;"><td style="padding:7px 10px;font-weight:700;"><span class="badge other">PD</span></td><td style="padding:7px 10px;">出版者作品届（ドラマ）</td><td style="padding:7px 10px;">Publisher registration, drama/tie-up. Works specifically registered in connection with a TV drama or other theatrical tie-up.</td><td style="padding:7px 10px;text-align:center;font-weight:600;">1</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:16px;padding:12px 14px;background:#f0f4ff;border-radius:8px;border-left:3px solid var(--accent);">
+        <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:6px;">SPLIT FIELD MAPPING NOTE</div>
+        <div style="font-size:11px;color:var(--text);line-height:1.6;">
+          J-WID shows each rights column as <strong>分/徴</strong> (distribution share / collection share) pairs. The scraper stores these sequentially:<br>
+          <code style="background:#e0e7ff;padding:1px 5px;border-radius:3px;">演奏 = split_perf / split_rec</code> &nbsp;
+          <code style="background:#e0e7ff;padding:1px 5px;border-radius:3px;">録音 = split_pub</code> &nbsp;
+          <code style="background:#e0e7ff;padding:1px 5px;border-radius:3px;">出版 = split_film / split_fp</code> &nbsp;
+          <code style="background:#e0e7ff;padding:1px 5px;border-radius:3px;">分保 = bunpo</code>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== DETAIL MODAL ===================== -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal" id="modal-panel" onclick="event.stopPropagation()">
+    <div class="modal-hdr">
+      <div class="modal-hdr-top">
+        <div class="modal-title" id="modal-title"></div>
+        <div style="display:flex;gap:6px;align-items:center;"><button class="edit-toggle-btn" id="modal-edit-btn" style="display:none">Edit</button>        <button class="modal-close" onclick="closeModalBtn()">✕</button></div>
+      </div>
+      <div class="modal-sub" id="modal-sub"></div>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<!-- Loading overlay -->
+<div class="loading-overlay hidden" id="loading-overlay">
+  <div class="spinner"></div>
+  <div class="loading-text">Loading MIYAVI Rights Data…</div>
+</div>
+<div class="toast" id="toast-el"></div>
+
+<!-- Settings modal -->
+<div class="overlay-modal hidden" id="settings-modal" onclick="if(event.target===this)closeSettingsModal()">
+  <div class="om-card">
+    <h2>GitHub Settings <button onclick="closeSettingsModal()">&#x2715;</button></h2>
+    <div class="form-row full"><div class="form-group">
+      <label>GitHub Owner (username or org)</label>
+      <input type="text" id="gh-owner" placeholder="e.g. arai3104">
+    </div></div>
+    <div class="form-row full"><div class="form-group">
+      <label>Repository Name</label>
+      <input type="text" id="gh-repo" placeholder="e.g. miyavi-dashboard">
+    </div></div>
+    <div class="form-row full"><div class="form-group">
+      <label>Personal Access Token (needs <code>contents:write</code> scope)</label>
+      <input type="password" id="gh-pat" placeholder="github_pat_…">
+      <div id="pat-status" class="pat-status"></div>
+    </div></div>
+    <p style="font-size:11px;color:var(--muted);margin-top:4px;">Stored only in your browser’s localStorage. <a href="https://github.com/settings/tokens/new" target="_blank" style="color:var(--accent);">Create a token ↗</a></p>
+    <div class="om-footer">
+      <button class="btn-secondary" onclick="testGHConnection()">Test Connection</button>
+      <button class="btn-secondary" onclick="clearGHPat()">Clear Token</button>
+      <button class="btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Record modal -->
+<div class="overlay-modal hidden" id="add-record-modal" onclick="if(event.target===this)closeAddRecordModal()">
+  <div class="om-card">
+    <h2>Add New Track <button onclick="closeAddRecordModal()">&#x2715;</button></h2>
+    <div class="form-row">
+      <div class="form-group"><label>Title <span style="color:#ef4444">*</span></label><input type="text" id="nr-title" placeholder="Track title"></div>
+      <div class="form-group"><label>Work Code (JASRAC)</label><input type="text" id="nr-work-code" placeholder="e.g. 1L4-1234-5"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Primary Artist</label><input type="text" id="nr-artist" placeholder="ＭＩＹＡＶＩ"></div>
+      <div class="form-group"><label>Release Period</label><input type="text" id="nr-release" placeholder="e.g. 2024年1-3月期"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Source Type</label>
+        <select id="nr-source">
+          <option value="">— select —</option>
+          <option value="PJ">PJ</option><option value="PE">PE</option>
+          <option value="PO">PO</option><option value="PW">PW</option>
+          <option value="SE">SE</option><option value="other">other</option>
+        </select>
+      </div>
+      <div class="form-group"><label>ISWC</label><input type="text" id="nr-iswc" placeholder="T-xxx.xxx.xxx-x"></div>
+    </div>
+    <hr class="om-divider">
+    <div class="om-section-lbl">Master &amp; Rights Info</div>
+    <div class="form-row">
+      <div class="form-group"><label>Master Right Holder</label><input type="text" id="nr-master-rh" placeholder="Label / company name"></div>
+      <div class="form-group"><label>Contract Status</label>
+        <select id="nr-contract-status">
+          <option value="">— select —</option>
+          <option value="Active">Active</option><option value="Expired">Expired</option><option value="Pending">Pending</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>License Start</label><input type="date" id="nr-license-start"></div>
+      <div class="form-group"><label>License End</label><input type="date" id="nr-license-end"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Advance Amount</label><input type="text" id="nr-advance" placeholder="e.g. ¥500,000"></div>
+      <div class="form-group"><label>Territory</label><input type="text" id="nr-territory" placeholder="e.g. WW, JP, US"></div>
+    </div>
+    <div class="form-row full">
+      <div class="form-group"><label>Internal Notes</label><textarea id="nr-notes" placeholder="Team notes about this track…"></textarea></div>
+    </div>
+    <div class="om-footer">
+      <button class="btn-secondary" onclick="closeAddRecordModal()">Cancel</button>
+      <button class="btn-primary" onclick="submitNewRecord()">Save Track</button>
+    </div>
+  </div>
+</div>
+
+
+<script>
+// ---- Data ----
+let RAW = [];
+
+let SPOTIFY_ONLY = [];
+
+// Build lookup by work_code
+let RAW_MAP = {};
+RAW.forEach(r => { RAW_MAP[r.work_code_raw] = r; });
+let SPO_MAP = {};
+if(typeof SPOTIFY_ONLY !== 'undefined'){
+  SPOTIFY_ONLY.forEach(s=>{
+    const recs = s.spotify_recordings || [];
+    recs.forEach(r=>{ if(r.isrc) SPO_MAP[r.isrc] = r; });
+    if(!recs.length && s.isrc) SPO_MAP[s.isrc] = s;
+  });
+}
+
+// ---- Build AGG ----
+const MIYAVI_RH_ID = '712754060';
+function buildAGG() {
+  const works = RAW.map(r => {
+    const miyaviRH = (r.rights_holders||[]).find(rh =>
+      rh.rh_id_norm === MIYAVI_RH_ID || rh.rh_id === MIYAVI_RH_ID);
+    const sp = miyaviRH ? (miyaviRH.splits || {}) : {};
+    // New format: perf_bun already contains combined value (e.g. '4/80') — perf_bun=演奏, perf_cho=録音
+    // Old format: perf_bun=演奏分, perf_cho=演奏徴 → joined; rec_bun=録音分, rec_cho=録音徴 → joined
+    const isNewFmt = sp.perf_bun && sp.perf_bun.includes('/');
+    const perfVal = isNewFmt ? (sp.perf_bun || '') :
+      (sp.perf_bun || sp.split_perf || '') + ((sp.perf_cho || sp.split_rec) ? '/' + (sp.perf_cho || sp.split_rec) : '');
+    const recVal  = isNewFmt ? (sp.perf_cho || '') :
+      (sp.rec_bun  || sp.split_pub  || '') + ((sp.rec_cho  || sp.split_film) ? '/' + (sp.rec_cho  || sp.split_film)  : '');
+    const yrM = (r.release_period||'').match(/(\d{4})/);
+    return {
+      work_code:            r.work_code_raw,   // dashed — must match RAW_MAP key
+      work_code_raw:        r.work_code_raw,
+      title:                r.title || '',
+      year:                 yrM ? yrM[1] : '',
+      source_type:          r.source_type || '',
+      iswc:                 r.iswc_jwid || r.iswc_csv || '',
+      split_perf:           perfVal,
+      split_rec:            recVal,
+      trust_status:         miyaviRH ? (miyaviRH.trust_status || '') : '',
+      holds:                (r.dist_holds||[]).length,
+      chui:                 r.chui_sakuhin === 'TRUE' ? '⚠️' : '',
+      rights_holders_count: (r.rights_holders||[]).length,
+      has_spotify:          !!(r.spotify_recordings && r.spotify_recordings.length),
+      has_bmg:              !!(r.bmg_data),
+      has_ump:              !!(r.ump_data),
+    };
+  });
+
+  // Cowriters (non-MIYAVI rights holders)
+  const cw = {};
+  RAW.forEach(r => {
+    (r.rights_holders||[]).forEach(rh => {
+      if (rh.rh_id_norm !== MIYAVI_RH_ID && rh.rh_id !== MIYAVI_RH_ID && rh.name) {
+        cw[rh.name] = (cw[rh.name]||0) + 1;
+      }
+    });
+  });
+  const cowriters = Object.entries(cw).sort((a,b)=>b[1]-a[1])
+    .map(([name,count]) => ({name, count}));
+
+  // Publishers (from UMP data)
+  const pp = {};
+  RAW.forEach(r => {
+    if (r.ump_data && r.ump_data.publishers) {
+      r.ump_data.publishers.forEach(p => {
+        if (p.name) pp[p.name] = (pp[p.name]||0) + 1;
+      });
+    }
+  });
+  const publishers = Object.entries(pp).sort((a,b)=>b[1]-a[1])
+    .map(([name,count]) => ({name, count}));
+
+  // Merge Spotify-only tracks into works list
+  if (typeof SPOTIFY_ONLY !== 'undefined') {
+    SPOTIFY_ONLY.forEach(s => {
+      // Each entry may wrap recordings in spotify_recordings[]
+      const recs = s.spotify_recordings || [];
+      const rep = recs[0] || s;  // representative recording for display
+      const isrc = rep.isrc || '';
+      const trackTitle = rep.track_title || '';
+      const releaseYear = (rep.release_date || '').slice(0, 4);
+      // One row per unique ISRC (deduplicate)
+      const seen = new Set();
+      recs.forEach(r => {
+        const key = r.isrc || r.track_title || Math.random();
+        if (seen.has(key)) return;
+        seen.add(key);
+        works.push({
+          _spotify_only: true,
+          work_code: 's:' + (r.isrc || r.track_title),
+          work_code_raw: 's:' + (r.isrc || r.track_title),
+          title: r.track_title || trackTitle,
+          year: (r.release_date || '').slice(0, 4) || releaseYear,
+          source_type: 'Spotify',
+          iswc: r.isrc || isrc,
+          split_perf: '', split_rec: '', trust_status: '',
+          holds: 0, chui: '', rights_holders_count: 0,
+          has_spotify: true, has_bmg: false, has_ump: false,
+          _spo: r,
+        });
+      });
+      // Fallback: if no spotify_recordings array, use s directly
+      if (!recs.length) {
+        works.push({
+          _spotify_only: true,
+          work_code: 's:' + (s.isrc || s.track_title),
+          work_code_raw: 's:' + (s.isrc || s.track_title),
+          title: s.track_title || '',
+          year: (s.release_date || '').slice(0, 4) || '',
+          source_type: 'Spotify',
+          iswc: s.isrc || '',
+          split_perf: '', split_rec: '', trust_status: '',
+          holds: 0, chui: '', rights_holders_count: 0,
+          has_spotify: true, has_bmg: false, has_ump: false,
+          _spo: s,
+        });
+      }
+    });
+  }
+
+  return { works, cowriters, publishers };
+}
+let AGG = {works:[],cowriters:[],publishers:[]};
+
+
+// ---- State ----
+let filtered = [];
+let sortCol = 'year', sortDir = -1, page = 0;
+const PAGE_SIZE = 50;
+let charts = {};
+
+// ---- Helpers ----
+const $ = id => document.getElementById(id);
+const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const avg = arr => { const n=arr.map(x=>parseFloat(x)).filter(x=>!isNaN(x)); return n.length ? n.reduce((a,b)=>a+b)/n.length : 0; };
+const PALETTE = ['#6366f1','#f59e0b','#10b981','#ef4444','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#f97316','#84cc16','#06b6d4','#d946ef'];
+
+function badge(type){
+  const m={PJ:'pj',PO:'po',PW:'pw',PE:'pe',SE:'other',SV:'other',SM:'other',PD:'other','':"other"};
+  return `<span class="badge ${m[type]||'other'}">${type||'?'}</span>`;
+}
+function trustBadge(t){
+  if(t==='全信託') return `<span class="badge trust">全信託</span>`;
+  if(t==='無信託') return `<span class="badge notrust">無信託</span>`;
+  if(t) return `<span class="badge partial">${esc(t)}</span>`;
+  return '—';
+}
+function holdFlag(v){
+  if(!v) return `<span class="hold-flag dash">—</span>`;
+  return `<span class="hold-flag ${v==='未'?'mi':'ok'}">${esc(v)}</span>`;
+}
+
+// ---- Multi-Select helpers ----
+function buildMs(id, opts){
+  const drop = document.getElementById('ms-drop-'+id);
+  drop.innerHTML = '';
+  opts.forEach(v=>{
+    const lbl=document.createElement('label');lbl.className='ms-opt';
+    const cb=document.createElement('input');cb.type='checkbox';cb.value=v;cb.onchange=()=>{updateMsLabel(id);applyFilters();};
+    lbl.appendChild(cb);lbl.appendChild(document.createTextNode(' '+v));
+    drop.appendChild(lbl);
+  });
+  const footer=document.createElement('div');footer.className='ms-footer';footer.textContent='Clear';
+  footer.onclick=(e)=>{e.stopPropagation();clearMs(id);};
+  drop.appendChild(footer);
+}
+function toggleMs(id){
+  const wrap=document.getElementById('ms-'+id);
+  const isOpen=wrap.classList.contains('open');
+  document.querySelectorAll('.ms-wrap.open').forEach(w=>w.classList.remove('open'));
+  if(!isOpen) wrap.classList.add('open');
+}
+function getMs(id){
+  return [...document.querySelectorAll('#ms-drop-'+id+' input:checked')].map(c=>c.value);
+}
+function clearMs(id){
+  document.querySelectorAll('#ms-drop-'+id+' input').forEach(c=>c.checked=false);
+  updateMsLabel(id); applyFilters();
+}
+const MS_DEFAULT={year:'All Years',src:'All Types',trust:'All',cw:'All'};
+function updateMsLabel(id){
+  const vals=getMs(id);
+  const lbl=document.getElementById('ms-lbl-'+id);
+  const wrap=document.getElementById('ms-'+id);
+  if(vals.length===0){lbl.textContent=MS_DEFAULT[id]||'All';wrap.classList.remove('ms-active');}
+  else if(vals.length===1){lbl.textContent=vals[0];wrap.classList.add('ms-active');}
+  else{lbl.textContent=vals.length+' selected';wrap.classList.add('ms-active');}
+}
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.ms-wrap')) document.querySelectorAll('.ms-wrap.open').forEach(w=>w.classList.remove('open'));
+});
+
+// ---- Filters ----
+function populateFilters(){
+  const years=[...new Set(AGG.works.map(w=>w.year).filter(Boolean))].sort();
+  buildMs('year',years);
+  const srcs=[...new Set(AGG.works.map(w=>w.source_type).filter(Boolean))].sort();
+  buildMs('src',srcs);
+  const trusts=[...new Set(AGG.works.map(w=>w.trust_status).filter(Boolean))].sort();
+  buildMs('trust',trusts);
+  // Cowriter: top ~30 by frequency
+  const cwCounts={};
+  RAW.forEach(r=>(r.rights_holders||[]).forEach(rh=>{
+    if(rh.rh_id_norm!==MIYAVI_RH_ID&&rh.rh_id!==MIYAVI_RH_ID&&rh.name&&rh.name.trim())
+      cwCounts[rh.name.trim()]=(cwCounts[rh.name.trim()]||0)+1;
+  }));
+  const topCw=Object.entries(cwCounts).sort((a,b)=>b[1]-a[1]).slice(0,30).map(([n])=>n);
+  buildMs('cw',topCw);
+}
+function applyFilters(){
+  const yrs=getMs('year'), srcs=getMs('src'), trusts=getMs('trust');
+  const holds=$('f-holds').value;
+  const spo=$('f-spo').value;
+  const cws=getMs('cw');
+  filtered=AGG.works.filter(w=>{
+    if(yrs.length && !yrs.includes(w.year)) return false;
+    if(srcs.length && !srcs.includes(w.source_type)) return false;
+    if(trusts.length && !trusts.includes(w.trust_status)) return false;
+    if(holds==='yes' && !w.holds) return false;
+    if(holds==='no' && w.holds) return false;
+    if(spo==='spotify' && !w._spotify_only) return false;
+    if(spo==='jasrac' && (w.has_spotify || w._spotify_only)) return false;
+    if(spo==='cover'){
+      var _tc = w._spotify_only ? 'spo:'+((w._spo&&(w._spo.isrc||w._spo.track_title))||w.title||'') : w.work_code;
+      if(getTag(_tc) !== 'cover') return false;
+    }
+    if(spo==='ext' && getTag(w.work_code) !== 'ext') return false;
+    if(cws.length){
+      const raw=RAW_MAP[w.work_code_raw]||RAW_MAP[w.work_code]||{};
+      const rhs=raw.rights_holders||[];
+      const hasCw=rhs.some(rh=>rh.rh_id_norm!==MIYAVI_RH_ID&&rh.rh_id!==MIYAVI_RH_ID&&cws.includes((rh.name||'').trim()));
+      if(!hasCw) return false;
+    }
+    return true;
+  });
+  page=0;
+  updateKPIs(); updateCharts(); updateRightsKPIs(); renderHoldsTable(); renderTable();
+}
+// initialise note count on load
+document.addEventListener('DOMContentLoaded',()=>updateNoteCount());
+function resetFilters(){
+  ['year','src','trust','cw'].forEach(id=>clearMs(id));
+  $('f-holds').value='';
+  $('f-spo').value='';
+  applyFilters();
+}
+
+// ---- KPIs ----
+function updateKPIs(){ updateTagCounts();
+  const f=filtered;
+  $('kpi-total').textContent=f.length;
+  $('kpi-iswc').textContent=f.filter(w=>w.iswc).length;
+  $('kpi-chui').textContent=f.filter(w=>w.chui).length;
+  $('kpi-holds').textContent=f.filter(w=>w.holds>0).length;
+}
+function updateRightsKPIs(){
+  const f=filtered;
+  $('kpi-trust-full').textContent=f.filter(w=>w.trust_status==='全信託').length;
+  $('kpi-holds2').textContent=f.filter(w=>w.holds>0).length;
+  const pa=avg(f.map(w=>w.split_perf)), ra=avg(f.map(w=>w.split_rec));
+  $('kpi-avg-perf').textContent=pa?pa.toFixed(1):'—';
+  $('kpi-avg-rec').textContent=ra?ra.toFixed(1):'—';
+}
+
+// ---- Charts ----
+function mkBar(id,labels,data,opts={}){
+  const ctx=$(id); if(!ctx) return;
+  if(charts[id]) charts[id].destroy();
+  const h=opts.horiz||labels.length>7;
+  charts[id]=new Chart(ctx,{type:'bar',data:{labels,datasets:[{data,backgroundColor:opts.colors||PALETTE.map(c=>c+'CC'),borderColor:opts.colors||PALETTE,borderWidth:1,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:h?'y':'x',plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed[h?'x':'y'].toLocaleString()}}},scales:{x:{beginAtZero:true,grid:{display:h},ticks:h?{}:{maxRotation:45,minRotation:30}},y:{beginAtZero:!h,grid:{display:!h}}}}});
+}
+function mkDoughnut(id,labels,data){
+  const ctx=$(id); if(!ctx) return;
+  if(charts[id]) charts[id].destroy();
+  charts[id]=new Chart(ctx,{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:PALETTE.map(c=>c+'CC'),borderColor:'#fff',borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,cutout:'58%',plugins:{legend:{position:'right',labels:{usePointStyle:true,padding:14,font:{size:11}}},tooltip:{callbacks:{label:c=>{const tot=c.dataset.data.reduce((a,b)=>a+b,0);return `${c.label}: ${c.parsed} (${((c.parsed/tot)*100).toFixed(1)}%)`;}}}}}}); 
+}
+function updateCharts(){
+  const f=filtered;
+  // Years
+  const ym={};f.forEach(w=>{if(w.year)ym[w.year]=(ym[w.year]||0)+1;});
+  const ys=Object.keys(ym).sort();
+  mkBar('ch-years',ys,ys.map(y=>ym[y]),{horiz:false,colors:ys.map(()=>'#6366f1CC')});
+  // Source
+  const sm={};f.forEach(w=>{const s=w.source_type||'Unknown';sm[s]=(sm[s]||0)+1;});
+  const sl=Object.keys(sm).sort((a,b)=>sm[b]-sm[a]);
+  mkDoughnut('ch-src',sl,sl.map(s=>sm[s]));
+  // Perf dist
+  const pb={'1-10':0,'11-25':0,'26-50':0,'51-100':0,'100+':0};
+  f.forEach(w=>{const v=parseFloat(w.split_perf);if(isNaN(v))return;if(v<=10)pb['1-10']++;else if(v<=25)pb['11-25']++;else if(v<=50)pb['26-50']++;else if(v<=100)pb['51-100']++;else pb['100+']++;});
+  mkBar('ch-perf',Object.keys(pb),Object.values(pb),{horiz:false,colors:['#6366f1CC','#6366f1CC','#6366f1CC','#6366f1CC','#ef4444CC']});
+  // Trust
+  const tm={};f.forEach(w=>{if(w.trust_status){tm[w.trust_status]=(tm[w.trust_status]||0)+1;}});
+  const tl=Object.keys(tm).sort((a,b)=>tm[b]-tm[a]);
+  mkDoughnut('ch-trust',tl,tl.map(t=>tm[t]));
+}
+function updateStaticCharts(){
+  const cw=AGG.cowriters.slice(0,12);
+  mkBar('ch-cowriters',cw.map(x=>x.name),cw.map(x=>x.count),{horiz:true});
+  const pb=AGG.publishers.slice(0,10);
+  mkBar('ch-pubs',pb.map(x=>x.name),pb.map(x=>x.count),{horiz:true});
+}
+
+// ---- Holds table ----
+function renderHoldsTable(){
+  const f=filtered.filter(w=>w.holds>0);
+  const el=$('holds-table');
+  if(!f.length){el.innerHTML='<p class="no-data">No distribution holds in current filter.</p>';return;}
+  let h='<table class="data-table"><thead><tr><th>Work Code</th><th>Title</th><th>Year</th><th>Type</th><th>Perf Split</th><th>Hold Count</th></tr></thead><tbody>';
+  f.forEach(w=>{
+    h+=`<tr class="clickable" onclick="openModal('${esc(w.work_code)}')">
+      <td style="font-family:monospace;font-size:11px;">${esc(w.work_code)}</td>
+      <td>${esc(w.title)}</td><td>${esc(w.year)}</td>
+      <td>${badge(w.source_type)}</td>
+      <td>${w.split_perf||'—'}</td>
+      <td><span class="badge hold">未 ×${w.holds}</span></td></tr>`;
+  });
+  h+='</tbody></table>';
+  el.innerHTML=h;
+}
+
+// ---- Works Table ----
+let tblData=[];
+// Normalize half-width/full-width (NFKC) and lowercase for search comparison
+const norm = s => String(s||'').normalize('NFKC').toLowerCase();
+function renderTable(){
+  const q=norm(($('tbl-search')||{value:''}).value);
+  tblData=filtered.filter(w=>!q||norm(w.title).includes(q)||norm(w.work_code).includes(q)||norm(w.iswc).includes(q)||norm((w._spo||{}).album).includes(q)||norm((w._spo||{}).isrc).includes(q));
+  tblData.sort((a,b)=>{let av=String(a[sortCol]??''),bv=String(b[sortCol]??'');if(av===''&&bv==='')return 0;if(av==='')return 1;if(bv==='')return -1;const an=Number(av),bn=Number(bv);if(isFinite(an)&&isFinite(bn))return an<bn?sortDir:an>bn?-sortDir:0;const al=av.toLowerCase(),bl=bv.toLowerCase();return al<bl?sortDir:al>bl?-sortDir:0;});
+  $('tbl-count').textContent=`(${tblData.length} works)`;
+  const start=page*PAGE_SIZE, end=Math.min(start+PAGE_SIZE,tblData.length), pg=tblData.slice(start,end);
+  const cols=[
+    {k:'work_code',lbl:'Work Code'},{k:'title',lbl:'Title'},{k:'year',lbl:'Year'},
+    {k:'source_type',lbl:'Type'},{k:'iswc',lbl:'ISWC'},
+    {k:'split_perf',lbl:'Perf'},{k:'split_rec',lbl:'Rec'},
+    {k:'trust_status',lbl:'Trust'},{k:'holds',lbl:'Holds'},
+    {k:'chui',lbl:'注意'},{k:'rights_holders_count',lbl:'# RH'}
+  ];
+  const arr=c=>sortCol===c?(sortDir===-1?'▼':'▲'):'';
+  let h='<table class="data-table"><thead><tr>';
+  cols.forEach(c=>{ h+=`<th onclick="setSort('${c.k}')">${c.lbl} ${arr(c.k)}</th>`; });
+  h+='</tr></thead><tbody>';
+  pg.forEach(w=>{
+    if(w._spotify_only){
+      const s=w._spo||{};
+      h+=`<tr class="clickable tr-spo" onclick="openSpoModal('${s.isrc||s.track_title||''}')">`;
+      h+=`<td style="font-family:monospace;font-size:11px;color:#6b7280;">${esc(s.isrc||'')}</td>`;
+      const _sn=getNote('spo:'+(s.isrc||s.track_title||'unknown'));
+      const _stag=getTag('spo:'+(s.isrc||s.track_title||'unknown'));
+      const _stBadge=_stag==='cover'?'<span class="badge-cover">🎤 Cover</span>':'';
+      h+=`<td title="${esc(w.title)}">${esc(w.title)}${_stBadge}${_sn?'<span class="badge-note">📝</span>':''}</td>`;
+      h+=`<td>${esc(w.year)}</td>`;
+      h+=`<td><span class="badge-spo">♫ Spotify</span></td>`;
+      h+=`<td style="font-size:11px;color:#6b7280;">${esc(s.isrc||'')}</td>`;
+      h+=`<td style="text-align:right;color:#9ca3af;">—</td>`;
+      h+=`<td style="text-align:right;color:#9ca3af;">—</td>`;
+      h+=`<td style="color:#9ca3af;">—</td>`;
+      h+=`<td>—</td>`;
+      h+=`<td></td>`;
+      h+=`<td style="text-align:right;color:#9ca3af;">—</td>`;
+      h+='</tr>';
+    } else {
+      h+=`<tr class="clickable" onclick="openModal('${esc(w.work_code)}')">`;
+      h+=`<td style="font-family:monospace;font-size:11px;">${esc(w.work_code)}</td>`;
+      const _wn=getNote(w.work_code);
+      const _wtag=getTag(w.work_code);
+      const _wtBadge=_wtag==='cover'?'<span class="badge-cover">🎤 Cover</span>':_wtag==='ext'?'<span class="badge-ext">✍️ For Others</span>':'';
+      h+=`<td title="${esc(w.title)}">${esc(w.title)}${_wtBadge}${_wn?'<span class="badge-note">📝</span>':''}</td>`;
+      h+=`<td>${esc(w.year)}</td>`;
+      h+=`<td>${badge(w.source_type)}${!w.has_spotify?'<span class="badge-jwid" style="margin-left:3px;">✕ Spotify</span>':''}</td>`;
+      h+=`<td style="font-size:11px;">${esc(w.iswc)}</td>`;
+      h+=`<td style="text-align:right;">${w.split_perf||'—'}</td>`;
+      h+=`<td style="text-align:right;">${w.split_rec||'—'}</td>`;
+      h+=`<td>${w.trust_status?trustBadge(w.trust_status):'—'}</td>`;
+      h+=`<td>${w.holds?`<span class="badge hold">未 ×${w.holds}</span>`:'—'}</td>`;
+      h+=`<td>${w.chui?'<span class="badge chui">注意</span>':''}</td>`;
+      h+=`<td style="text-align:right;">${w.rights_holders_count}</td>`;
+      h+='</tr>';
+    }
+  });
+  h+='</tbody></table>';
+  $('tbl-container').innerHTML=h;
+  $('pager-info').textContent=`Showing ${start+1}–${end} of ${tblData.length}`;
+  $('btn-prev').disabled=page===0;
+  $('btn-next').disabled=end>=tblData.length;
+}
+function setSort(col){ if(sortCol===col)sortDir*=-1;else{sortCol=col;sortDir=-1;}page=0;renderTable(); }
+function changePage(d){ page+=d; renderTable(); $('tbl-container').scrollIntoView({behavior:'smooth',block:'start'}); }
+
+// ---- Tabs ----
+function switchTab(id,btn){
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+  $('tab-'+id).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ---- Modal ----
+// ---- Notes (localStorage) ----
+const NOTES_KEY = 'miyavi_notes';
+function getNotes(){ try{ return JSON.parse(localStorage.getItem(NOTES_KEY)||'{}'); }catch(e){ return {}; } }
+function getNote(code){ return (getNotes()[code]||{}).text||''; }
+function saveNote(code, text){
+  const n=getNotes(); n[code]={text:text.trim(), updated:new Date().toISOString()}; localStorage.setItem(NOTES_KEY,JSON.stringify(n));
+}
+function noteSection(code){
+  const val=getNote(code);
+  return `<div class="note-section">
+    <label>📝 My Notes</label>
+    <textarea class="note-textarea" id="note-ta" placeholder="Add your notes about this track…">${val.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+    <div class="note-save-row">
+      <span class="note-saved-msg" id="note-saved-msg">Saved ✓</span>
+      <button class="note-save-btn" onclick="doSaveNote('${code.replace(/'/g,"\'")}')">Save Note</button>
+    </div>
+  </div>`;
+}
+function exportNotes(){
+  const n=getNotes();
+  const t=getTags();
+  const hasNotes=Object.keys(n).length>0;
+  const hasTags=Object.keys(t).length>0;
+  if(!hasNotes && !hasTags){ alert('No notes or tags to export yet.'); return; }
+  const payload={notes:n, tags:t, exportedAt:new Date().toISOString(), version:2};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='miyavi_notes_'+new Date().toISOString().slice(0,10)+'.json';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function importNotes(input){
+  const file=input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const raw=JSON.parse(e.target.result);
+      if(typeof raw!=='object'||Array.isArray(raw)) throw new Error('Invalid format');
+
+      // Support both v2 (wrapped) and legacy (flat notes-only) format
+      let importedNotes, importedTags;
+      if(raw.version===2 && raw.notes !== undefined){
+        importedNotes = raw.notes  || {};
+        importedTags  = raw.tags   || {};
+      } else {
+        // Legacy: entire file is a notes map
+        importedNotes = raw;
+        importedTags  = {};
+      }
+
+      // Merge notes
+      const mergedNotes = Object.assign({}, getNotes(), importedNotes);
+      localStorage.setItem(NOTES_KEY, JSON.stringify(mergedNotes));
+
+      // Merge tags
+      const mergedTags = Object.assign({}, getTags(), importedTags);
+      localStorage.setItem(TAGS_KEY, JSON.stringify(mergedTags));
+
+      const nc=Object.keys(importedNotes).length;
+      const tc=Object.keys(importedTags).length;
+      const parts=[];
+      if(nc) parts.push(nc+' note'+(nc===1?'':'s'));
+      if(tc) parts.push(tc+' tag'+(tc===1?'':'s'));
+      alert('Imported '+parts.join(' and ')+'. Existing data preserved for any items not in the import.');
+      updateNoteCount(); updateTagCounts(); renderTable();
+    }catch(err){ alert('Could not read file: '+err.message); }
+    input.value='';
+  };
+  reader.readAsText(file);
+}
+
+// ---- Tags (localStorage) ----
+const TAGS_KEY = 'miyavi_tags';
+function getTags(){ try{ return JSON.parse(localStorage.getItem(TAGS_KEY)||'{}'); }catch(e){ return {}; } }
+function getTag(code){ return getTags()[code] || null; }
+function setTag(code, tagVal){
+  var t = getTags();
+  if(tagVal) t[code] = tagVal; else delete t[code];
+  localStorage.setItem(TAGS_KEY, JSON.stringify(t));
+  renderTable(); updateTagCounts();
+}
+function toggleTagInModal(code, tagVal, sectionType){
+  var current = getTag(code);
+  setTag(code, current === tagVal ? null : tagVal);
+  var safeId = 'tsec_' + code.replace(/[^a-z0-9]/gi,'_');
+  var el = document.getElementById(safeId);
+  if(el) el.outerHTML = buildTagSection(code, sectionType);
+}
+function buildTagSection(code, type){
+  var current = getTag(code);
+  var safeId  = 'tsec_' + code.replace(/[^a-z0-9]/gi,'_');
+  var esc2 = function(s){ return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'"); };
+  var sc = esc2(code);
+  var clearBtn = function(tv, st){
+    return '<button class="tag-btn tag-clear" onclick="toggleTagInModal(\'' + sc + '\',\'' + tv + '\',\'' + st + '\')">✕ Remove</button>';
+  };
+  if(type === 'cover'){
+    var isActive = current === 'cover';
+    var cls = 'tag-btn' + (isActive ? ' active-cover' : '');
+    var lbl = isActive ? '✓ Cover Song' : 'Mark as Cover Song';
+    var mainBtn = '<button class="' + cls + '" onclick="toggleTagInModal(\'' + sc + '\',\'cover\',\'cover\')">🎤 ' + lbl + '</button>';
+    return '<div class="tag-section" id="' + safeId + '"><label>🏷️ Tag</label>' + mainBtn + (isActive ? clearBtn('cover','cover') : '') + '</div>';
+  } else {
+    var isActive = current === 'ext';
+    var cls = 'tag-btn' + (isActive ? ' active-ext' : '');
+    var lbl = isActive ? '✓ Written for Other Artist' : 'Mark as Written for Other Artist';
+    var mainBtn = '<button class="' + cls + '" onclick="toggleTagInModal(\'' + sc + '\',\'ext\',\'ext\')">✍️ ' + lbl + '</button>';
+    return '<div class="tag-section" id="' + safeId + '"><label>🏷️ Tag</label>' + mainBtn + (isActive ? clearBtn('ext','ext') : '') + '</div>';
+  }
+}
+function updateTagCounts(){
+  var t = getTags();
+  var vals = Object.values(t);
+  var covers = vals.filter(function(v){ return v === 'cover'; }).length;
+  var ext    = vals.filter(function(v){ return v === 'ext'; }).length;
+  var total  = covers + ext;
+  var ce=$('kpi-covers'), ee=$('kpi-ext'), te=$('kpi-tagged-total');
+  if(ce) ce.textContent = covers;
+  if(ee) ee.textContent = ext;
+  if(te) te.textContent = total;
+}
+
+function updateNoteCount(){
+  const n=getNotes(); const c=Object.values(n).filter(v=>v&&v.text).length;
+  const el=$('note-count-badge'); if(el) el.textContent='📝 '+c+' note'+(c===1?'':'s');
+}
+function doSaveNote(code){
+  const ta=$('note-ta'); if(!ta) return;
+  saveNote(code, ta.value);
+  const msg=$('note-saved-msg'); msg.style.opacity=1; setTimeout(()=>msg.style.opacity=0, 1800);
+  renderTable(); updateNoteCount(); // refresh table badges + count
+}
+
+function openSpoModal(keyOrObj){
+  const s = (typeof keyOrObj === 'string') ? (SPO_MAP[keyOrObj] || {track_title: keyOrObj}) : keyOrObj;
+  const title=s.track_title||'Unknown';
+  let body=`<div class="msec"><div class="msec-title">Spotify Recording</div>`;
+  body+=`<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;margin-top:8px;">`;
+  const rows=[['Title',s.track_title],['Album',s.album],['Release',s.release_date],['Label',s.label],['Duration',s.duration],['ISRC',s.isrc]];
+  rows.forEach(([k,v])=>{ if(v) body+=`<span style="color:#94a3b8;font-size:11px;padding-top:2px;">${esc(k)}</span><span>${esc(v)}</span>`; });
+  body+='</div></div>';
+  if(s.spotify_url){
+    body+=`<div class="msec"><div class="msec-title">Listen</div>`;
+    body+=`<a href="${esc(s.spotify_url)}" target="_blank" style="color:#1DB954;font-size:13px;">Open on Spotify ↗</a></div>`;
+  }
+  body+=`<div class="msec" style="background:#fffbeb;border-left:3px solid #f59e0b;padding:10px 14px;border-radius:4px;font-size:12px;color:#92400e;">`;
+  body+=`⚠️ This track has no JASRAC registration found — no rights data available.</div>`;
+  var _spoTagCode = 'spo:' + (s.isrc || s.track_title || 'unknown');
+  body += buildTagSection(_spoTagCode, 'cover');
+  body += noteSection(_spoTagCode);
+  $('modal-title').textContent=title;
+  $('modal-body').innerHTML=body;
+  $('modal-overlay').classList.add('open');
+}
+function openModal(workCode){
+  const r = RAW_MAP[workCode];
+  if(!r) return;
+
+  $('modal-title').textContent = r.title || workCode;
+  $('modal-sub').innerHTML = [
+    r.work_code_raw ? `<span>🔢 ${esc(r.work_code_raw)}</span>` : '',
+    r.source_type ? `<span>📂 ${esc(r.source_type)}</span>` : '',
+    r.release_period ? `<span>📅 ${esc(r.release_period)}</span>` : '',
+    r.status ? `<span>✅ ${esc(r.status)}</span>` : '',
+    r.chui_sakuhin === 'TRUE' ? '<span style="color:#fbbf24">⚠️ 注意作品</span>' : ''
+  ].filter(Boolean).join('');
+
+  let body = '';
+
+  // ---- Meta ----
+  body += '<div class="msec"><div class="msec-title">Work Info</div><div class="meta-grid">';
+  const metaFields = [
+    ['Work Code (Raw)', r.work_code_raw],
+    ['Work Code', r.work_code],
+    ['Primary Artist', r.primary_artist],
+    ['Release Period', r.release_period],
+    ['Catalog Code', r.catalog_code],
+    ['Contract Date', r.contract_date],
+    ['Source Type', r.source_type],
+    ['Status', r.status],
+    ['ISWC (J-WID)', r.iswc_jwid],
+    ['ISWC (CSV)', r.iswc_csv],
+  ];
+  metaFields.forEach(([lbl,val])=>{
+    if(val) body+=`<div class="meta-item"><div class="meta-lbl">${esc(lbl)}</div><div class="meta-val">${esc(val)}</div></div>`;
+  });
+  body += '</div></div>';
+
+  // ---- Titles ----
+  const allTitles = [...(r.titles||[]), ...(r.alt_titles||[])];
+  if(allTitles.length){
+    body += '<div class="msec"><div class="msec-title">Titles & Alternate Titles</div><ul class="title-list">';
+    allTitles.forEach(t=>{
+      body += `<li><span class="title-type">${esc(t.type)}</span><span>${esc(t.title)}</span></li>`;
+    });
+    body += '</ul></div>';
+  }
+
+  // ---- Rights Holders ----
+  const rhs = r.rights_holders || [];
+  if(rhs.length){
+    body += '<div class="msec"><div class="msec-title">Rights Holders</div>';
+    body += '<table class="rh-table"><thead><tr>';
+    body += '<th>#</th><th>Name</th><th>Role</th><th>Trust / Org</th><th>Splits</th></tr></thead><tbody>';
+    rhs.forEach(rh=>{
+      const isMiyavi = (rh.name||'').includes('ＭＩＹＡＶＩ') || (rh.name||'').includes('MIYAVI');
+      const sp = rh.splits || {};
+      // New format (perf_bun contains '/'): perf_bun=演奏, perf_cho=録音, rec_bun=出版, rec_cho=映像
+      // Old format: perf_bun=演奏分+perf_cho=演奏徴 joined; rec_bun=録音分+rec_cho=録音徴 joined
+      const isNewFmt = sp.perf_bun && sp.perf_bun.includes('/');
+      let perfVal, recVal, fpVal, frVal;
+      if (isNewFmt) {
+        perfVal = sp.perf_bun || '';
+        recVal  = sp.perf_cho || '';
+        fpVal   = sp.fp || '';
+        frVal   = sp.fr || '';
+      } else {
+        const perfBun = sp.perf_bun || sp.split_perf || '';
+        const perfCho = sp.perf_cho || sp.split_rec  || '';  // split_rec is 演奏徴
+        const recBun  = sp.rec_bun  || sp.split_pub  || '';  // split_pub is 録音分
+        const recCho  = sp.rec_cho  || sp.split_film || '';  // split_film is 録音徴
+        fpVal   = sp.fp || sp.split_fp || '';
+        frVal   = sp.fr || sp.split_fr || '';
+        const nz = v => v !== '' && v !== null && v !== undefined;
+        perfVal = [perfBun, perfCho].filter(nz).join('/') || '';
+        recVal  = [recBun,  recCho ].filter(nz).join('/') || '';
+      }
+      const splitFields = [
+        ['演奏', perfVal],
+        ['録音', recVal],
+        ['出版/外演', fpVal],
+        ['映像/外録', frVal],
+        ['分保', sp.bunpo],
+        ['徴保', sp.choho],
+      ];
+      const chipsHtml = splitFields
+        .filter(([,v])=>v!==''&&v!==undefined&&v!==null)
+        .map(([l,v])=>`<span class="split-chip">${l}:${esc(String(v))}</span>`).join('');
+      body += `<tr${isMiyavi?' class="miyavi-row"':''}>
+        <td>${esc(rh.seq+'')}</td>
+        <td><strong>${esc(rh.name||'')}</strong><br><small style="color:#888">${esc(rh.rh_id||'')}</small></td>
+        <td><small>${esc(rh.contract_type||'')}</small></td>
+        <td><small>${esc(rh.trust_status||'')} ${esc(rh.organization||'')}</small></td>
+        <td class="splits-cell">${chipsHtml||'—'}</td></tr>`;
+    });
+    body += '</tbody></table></div>';
+  }
+
+  // ---- Distribution Holds ----
+  const holds = r.dist_holds || [];
+  if(holds.length){
+    body += '<div class="msec"><div class="msec-title">Distribution Holds</div>';
+    body += '<table class="rh-table"><thead><tr><th>Name</th><th>ID</th><th>Holds</th></tr></thead><tbody>';
+    holds.forEach(h=>{
+      const holdFields = ['perf_bun','perf_cho','rec_bun','rec_cho','pub_bun','pub_cho',
+        'film_bun','film_cho','rental_bun','rental_cho','broadcast_bun','broadcast_cho',
+        'stream_bun','stream_cho','comm_bun','comm_cho','fp_bun','fp_cho','fr_bun','fr_cho'];
+      const flags = holdFields.filter(k=>h[k] && h[k].trim()).map(k=>`<span class="hold-chip ${h[k]==='競'?'hold-red':h[k]==='照'?'hold-orange':''}">${k.replace('_','<br>')}:${esc(h[k])}</span>`).join('');
+      if(flags) body += `<tr><td><strong>${esc(h.name||'')}</strong></td><td><small>${esc(h.rh_id||'')}</small></td><td>${flags}</td></tr>`;
+    });
+    body += '</tbody></table></div>';
+  }
+
+  // ---- UMP Contract Data ----
+  const ump = r.ump_data;
+  if(ump) {
+    let umpsec = '<div class="msec">';
+    umpsec += '<div class="msec-title">UMP Contract Data <span class="ump-badge">UMP</span></div>';
+    const metaParts = [];
+    if(ump.contract_start) metaParts.push(`契約開始: ${esc(ump.contract_start)}`);
+    if(ump.contract_period) metaParts.push(`契約期間: ${esc(ump.contract_period)}`);
+    if(ump.sub_codes && ump.sub_codes.length) metaParts.push(`Sub Codes: ${ump.sub_codes.map(c=>esc(c)).join(', ')}`);
+    if(ump.ump_no) metaParts.push(`UMP No.: ${esc(ump.ump_no)}`);
+    if(metaParts.length) {
+      umpsec += '<div class="ump-meta-row">' + metaParts.map(p=>`<span>${p}</span>`).join('') + '</div>';
+    }
+    if(ump.writers && ump.writers.length) {
+      umpsec += '<div style="font-size:11px;font-weight:700;color:#5b21b6;letter-spacing:.5px;margin-bottom:4px;text-transform:uppercase;">Writers</div>';
+      umpsec += '<table class="ump-writers-table"><thead><tr><th>Name</th><th>Role</th><th>Share</th><th>Writer Take</th></tr></thead><tbody>';
+      ump.writers.forEach(w => {
+        const sharePill = w.share_pct ? `<span class="share-pill">${esc(w.share_pct)}</span>` : '—';
+        const takePill  = w.writer_take ? `<span class="take-pill">${esc(w.writer_take)}</span>` : '—';
+        umpsec += `<tr><td><strong>${esc(w.name)}</strong></td><td>${esc(w.role)}</td><td>${sharePill}</td><td>${takePill}</td></tr>`;
+      });
+      umpsec += '</tbody></table>';
+    }
+    if(ump.publishers && ump.publishers.length) {
+      umpsec += '<div style="font-size:11px;font-weight:700;color:#92400e;letter-spacing:.5px;margin:10px 0 4px;text-transform:uppercase;">Publishers</div>';
+      umpsec += '<table class="ump-publishers-table"><thead><tr><th>Publisher</th><th>Share</th></tr></thead><tbody>';
+      ump.publishers.forEach(p => {
+        umpsec += `<tr><td>${esc(p.name)}</td><td><span class="pub-share">${esc(p.share)}</span></td></tr>`;
+      });
+      umpsec += '</tbody></table>';
+    }
+    umpsec += '</div>';
+    body += umpsec;
+  }
+
+  // ---- Spotify Recordings ----
+  const spotify = r.spotify_recordings || [];
+  if(spotify.length){
+    body += '<div class="msec"><div class="msec-title">Spotify Recordings <span class="spotify-badge">SPOTIFY</span></div>';
+    // Embed first recording's player, then list all
+    const firstWithUrl = spotify.find(s=>s.spotify_url);
+    if(firstWithUrl){
+      const trackId = firstWithUrl.spotify_url.replace('https://open.spotify.com/track/','').split('?')[0];
+      body += `<div class="spotify-embed-wrap">
+        <iframe style="border-radius:8px" src="https://open.spotify.com/embed/track/${esc(trackId)}?utm_source=generator&theme=0"
+          width="100%" height="80" frameborder="0"
+          allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+          loading="lazy"></iframe></div>`;
+    }
+    if(spotify.length > 1){
+      body += '<div class="spotify-list">';
+      spotify.forEach((s,i)=>{
+        const badge = s.match_label==='Exact' ? '<span class="match-exact">✓ Exact</span>'
+                    : s.match_label ? `<span class="match-fuzzy">${esc(s.match_label)}</span>` : '';
+        const trackId = (s.spotify_url||'').replace('https://open.spotify.com/track/','').split('?')[0];
+        const link = trackId ? `<a href="${esc(s.spotify_url)}" target="_blank" class="spotify-link">▶</a>` : '';
+        body += `<div class="spotify-row">
+          <div class="spotify-row-info">
+            ${link}
+            <div>
+              <div class="spotify-track">${esc(s.track_title||'')} ${badge}</div>
+              <div class="spotify-meta">${esc(s.album||'')}${s.release_date?' · '+esc(s.release_date):''}${s.duration?' · '+esc(s.duration):''}</div>
+              <div class="spotify-meta">${esc(s.label||'')}${s.isrc?' · ISRC: '+esc(s.isrc):''}</div>
+            </div>
+          </div>
+        </div>`;
+      });
+      body += '</div>';
+    }
+    body += '</div>';
+  }
+
+  // ---- BMG Credits ----
+  const bmg = r.bmg_data;
+  if(bmg){
+    body += '<div class="msec"><div class="msec-title">BMG Credits <span class="bmg-badge">BMG</span></div>';
+    // Quick-info chips
+    const bmgMeta = [];
+    if(bmg.genre)           bmgMeta.push(['Genre', bmg.genre]);
+    if(bmg.version_mix)     bmgMeta.push(['Version', bmg.version_mix]);
+    if(bmg.explicit)        bmgMeta.push(['Explicit', bmg.explicit]);
+    if(bmg.cover)           bmgMeta.push(['Cover', bmg.cover]);
+    if(bmg.remix)           bmgMeta.push(['Remix', bmg.remix]);
+    if(bmg.producer_country)bmgMeta.push(['Produced in', bmg.producer_country]);
+    if(bmgMeta.length){
+      body += '<div class="bmg-chips">' + bmgMeta.map(([l,v])=>`<span class="bmg-chip"><b>${esc(l)}</b> ${esc(v)}</span>`).join('') + '</div>';
+    }
+    // Structured text fields
+    const bmgFields = [
+      ['Songwriters / Share', bmg.songwriters],
+      ['Producer(s)', bmg.producer],
+      ['Contributors', bmg.contributors],
+      ['Recording Engineers', bmg.rec_engineers],
+      ['Other Credits', bmg.other_credits],
+      ['Legal Names', bmg.legal_names],
+      ['Publisher', bmg.publisher],
+    ];
+    bmgFields.forEach(([lbl, val])=>{
+      if(!val) return;
+      // Truncate very long publisher field, with expand toggle
+      const id = 'bmg_' + lbl.replace(/\W+/g,'_');
+      const lines = val.split('\n').filter(l=>l.trim());
+      const isLong = lines.length > 6 || val.length > 400;
+      const preview = isLong ? lines.slice(0,4).join('\n') : val;
+      body += `<div class="bmg-field">
+        <div class="bmg-field-lbl">${esc(lbl)}</div>
+        <pre class="bmg-field-val" id="${id}" data-full="${esc(val).replace(/"/g,'&quot;')}">${esc(preview)}</pre>
+        ${isLong ? `<button class="bmg-expand" onclick="toggleBmg('${id}')">Show more ▾</button>` : ''}
+      </div>`;
+    });
+    body += '</div>';
+  }
+
+  body += renderMasterRightsSection(r);
+  body += buildTagSection(workCode, 'ext');
+  body += noteSection(workCode);
+  $('modal-body').innerHTML = body;
+  _currentModalWorkCode = workCode;
+  const _editBtn = $('modal-edit-btn');
+  if (_editBtn && !r._spotify_only) {
+    _editBtn.style.display = '';
+    _editBtn.classList.toggle('disabled', !getGHPat());
+    _editBtn.title = getGHPat() ? 'Edit this track' : 'Set a GitHub token in Settings to enable editing';
+    _editBtn.onclick = getGHPat() ? function(){ showEditForm(workCode); } : function(){ openSettingsModal(); };
+  } else if (_editBtn) { _editBtn.style.display = 'none'; }
+  $('modal-overlay').classList.add('open');
+  document.body.style.overflow='hidden';
+}
+
+function closeModal(e){
+  if(e.target===$('modal-overlay')) closeModalBtn();
+}
+function closeModalBtn(){
+  $('modal-overlay').classList.remove('open');
+  document.body.style.overflow='';
+}
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeModalBtn(); });
+
+// ---- Glossary ----
+function showGlossary(){
+  $('glossary-overlay').classList.add('open');
+  document.body.style.overflow='hidden';
+}
+function closeGlossary(){
+  $('glossary-overlay').classList.remove('open');
+  document.body.style.overflow='';
+}
+
+// ---- Init ----
+window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    showLoading();
+    const [coreRes, overlayRes] = await Promise.all([
+      fetch('miyavi_full_merged.json'),
+      fetch('overlay.json')
+    ]);
+    if (!coreRes.ok) throw new Error('Could not load miyavi_full_merged.json (' + coreRes.status + ')');
+    const coreData = await coreRes.json();
+    const overlayData = await overlayRes.json().catch(() => ({edits:{},new_records:[]}));
+    RAW = coreData.compositions || [];
+    SPOTIFY_ONLY = coreData.unmatched_spotify || [];
+    const _edits = overlayData.edits || {};
+    RAW.forEach(r => { const ed = _edits[r.work_code_raw]; if (ed) Object.assign(r, ed); });
+    (overlayData.new_records || []).forEach(r => { RAW.push(Object.assign({}, r, {_manual: true})); });
+    RAW_MAP = {};
+    RAW.forEach(r => { RAW_MAP[r.work_code_raw] = r; });
+    SPO_MAP = {};
+    if (SPOTIFY_ONLY) {
+      SPOTIFY_ONLY.forEach(s => {
+        const recs = s.spotify_recordings || [];
+        recs.forEach(r => { if(r.isrc) SPO_MAP[r.isrc] = r; });
+        if (!recs.length && s.isrc) SPO_MAP[s.isrc] = s;
+      });
+    }
+    AGG = buildAGG();
+    filtered = AGG.works.slice();
+    hideLoading();
+    populateFilters();
+    applyFilters();
+    updateStaticCharts();
+    updateTagCounts();
+    updateEditButtons();
+  } catch(e) {
+    hideLoading();
+    console.error('Data load failed:', e);
+    document.body.insertAdjacentHTML('afterbegin',
+      '<div style="background:#fee2e2;color:#991b1b;padding:14px 24px;font-size:14px;border-radius:8px;margin-bottom:12px;">' +
+      '⚠ Failed to load: ' + e.message +
+      '. Serve this folder via HTTP: <code>python3 -m http.server 8080</code></div>');
+  }
+});
+
+function toggleBmg(id){
+  const el = document.getElementById(id);
+  const btn = el.nextElementSibling;
+  const fullVal = el.dataset.full || '';
+  if(el.dataset.expanded==='1'){
+    el.textContent = fullVal.split('\n').filter(l=>l.trim()).slice(0,4).join('\n');
+    el.dataset.expanded='0'; btn.textContent='Show more ▾';
+  } else {
+    el.textContent = fullVal;
+    el.dataset.expanded='1'; btn.textContent='Show less ▴';
+  }
+}
+
+</script>
+</body>
+</html>
