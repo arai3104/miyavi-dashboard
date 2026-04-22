@@ -490,24 +490,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <!-- Settings modal -->
 <div class="overlay-modal hidden" id="settings-modal" onclick="if(event.target===this)closeSettingsModal()">
   <div class="om-card">
-    <h2>GitHub Settings <button onclick="closeSettingsModal()">&#x2715;</button></h2>
+    <h2>Settings <button onclick="closeSettingsModal()">&#x2715;</button></h2>
     <div class="form-row full"><div class="form-group">
-      <label>GitHub Owner (username or org)</label>
-      <input type="text" id="gh-owner" placeholder="e.g. arai3104">
+      <label>Google Apps Script URL</label>
+      <input type="text" id="gas-url" placeholder="https://script.google.com/macros/s/…/exec">
+      <div id="gas-status" class="pat-status"></div>
     </div></div>
-    <div class="form-row full"><div class="form-group">
-      <label>Repository Name</label>
-      <input type="text" id="gh-repo" placeholder="e.g. miyavi-dashboard">
-    </div></div>
-    <div class="form-row full"><div class="form-group">
-      <label>Personal Access Token (needs <code>contents:write</code> scope)</label>
-      <input type="password" id="gh-pat" placeholder="github_pat_…">
-      <div id="pat-status" class="pat-status"></div>
-    </div></div>
-    <p style="font-size:11px;color:var(--muted);margin-top:4px;">Stored only in your browser’s localStorage. <a href="https://github.com/settings/tokens/new" target="_blank" style="color:var(--accent);">Create a token ↗</a></p>
+    <p style="font-size:11px;color:var(--muted);margin-top:4px;">Paste the deployed Apps Script web app URL. Stored only in your browser’s localStorage.</p>
     <div class="om-footer">
-      <button class="btn-secondary" onclick="testGHConnection()">Test Connection</button>
-      <button class="btn-secondary" onclick="clearGHPat()">Clear Token</button>
+      <button class="btn-secondary" onclick="testGASConnection()">Test Connection</button>
+      <button class="btn-secondary" onclick="clearGASUrl()">Clear URL</button>
       <button class="btn-primary" onclick="saveSettings()">Save</button>
     </div>
   </div>
@@ -1350,9 +1342,9 @@ function openModal(workCode){
   const _editBtn = $('modal-edit-btn');
   if (_editBtn && !r._spotify_only) {
     _editBtn.style.display = '';
-    _editBtn.classList.toggle('disabled', !getGHPat());
-    _editBtn.title = getGHPat() ? 'Edit this track' : 'Set a GitHub token in Settings to enable editing';
-    _editBtn.onclick = getGHPat() ? function(){ showEditForm(workCode); } : function(){ openSettingsModal(); };
+    _editBtn.classList.toggle('disabled', !getGASUrl());
+    _editBtn.title = getGASUrl() ? 'Edit this track' : 'Set Apps Script URL in Settings (\u2699) to enable editing';
+    _editBtn.onclick = getGASUrl() ? function(){ showEditForm(workCode); } : function(){ openSettingsModal(); };
   } else if (_editBtn) { _editBtn.style.display = 'none'; }
   $('modal-overlay').classList.add('open');
   document.body.style.overflow='hidden';
@@ -1381,9 +1373,10 @@ function closeGlossary(){
 window.addEventListener('DOMContentLoaded', async () => {
   try {
     showLoading();
+    const gasUrl = getGASUrl();
     const [coreRes, overlayRes] = await Promise.all([
       fetch('miyavi_full_merged.json'),
-      fetch('overlay.json')
+      gasUrl ? fetch(gasUrl + '?action=get') : fetch('overlay.json')
     ]);
     if (!coreRes.ok) throw new Error('Could not load miyavi_full_merged.json (' + coreRes.status + ')');
     const coreData = await coreRes.json();
@@ -1436,53 +1429,33 @@ function toggleBmg(id){
 
 
 // ════════════════════════════════════════
-// OVERLAY / GITHUB API
+// OVERLAY / GOOGLE APPS SCRIPT BACKEND
 // ════════════════════════════════════════
-const GH_PAT_KEY='miyavi_gh_pat', GH_OWNER_KEY='miyavi_gh_owner', GH_REPO_KEY='miyavi_gh_repo';
+const GAS_URL_KEY='miyavi_gas_url';
 let _currentModalWorkCode='';
-function getGHPat()   { return localStorage.getItem(GH_PAT_KEY)||''; }
-function getGHOwner() { return localStorage.getItem(GH_OWNER_KEY)||''; }
-function getGHRepo()  { return localStorage.getItem(GH_REPO_KEY)||''; }
-function ghHdr() {
-  return {'Authorization':'token '+getGHPat(),'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'};
-}
-async function ghGet(path) {
-  const r=await fetch('https://api.github.com/repos/'+getGHOwner()+'/'+getGHRepo()+'/contents/'+path,{headers:ghHdr()});
-  if(!r.ok) throw new Error('GitHub GET '+r.status+' '+r.statusText);
-  return r.json();
-}
-async function ghPut(path,data,sha,msg) {
-  const enc=btoa(unescape(encodeURIComponent(JSON.stringify(data,null,2)+'\n')));
-  const r=await fetch('https://api.github.com/repos/'+getGHOwner()+'/'+getGHRepo()+'/contents/'+path,
-    {method:'PUT',headers:ghHdr(),body:JSON.stringify({message:msg||'Update overlay',content:enc,sha:sha})});
-  if(!r.ok){const e=await r.json().catch(()=>({})); throw new Error(e.message||'GitHub PUT '+r.status);}
+function getGASUrl(){ return localStorage.getItem(GAS_URL_KEY)||''; }
+async function gasPost(payload) {
+  const url=getGASUrl();
+  if(!url) throw new Error('No Apps Script URL \u2014 open \u2699 Settings');
+  const r=await fetch(url,{method:'POST',body:JSON.stringify(payload)});
+  if(!r.ok) throw new Error('GAS POST '+r.status);
   return r.json();
 }
 async function saveOverlayEdit(workCode,data) {
-  if(!getGHPat()){showToast('No GitHub token \u2014 open \u2699 Settings','err');return;}
-  if(!getGHOwner()||!getGHRepo()){showToast('Set GitHub owner/repo in Settings','err');return;}
+  if(!getGASUrl()){showToast('No Apps Script URL \u2014 open \u2699 Settings','err');return;}
   try {
     showToast('Saving\u2026');
-    const file=await ghGet('overlay.json');
-    const ov=JSON.parse(atob(file.content.replace(/\n/g,'')));
-    ov.edits=ov.edits||{};
-    ov.edits[workCode]=Object.assign(ov.edits[workCode]||{},data);
-    await ghPut('overlay.json',ov,file.sha,'Update rights: '+workCode);
+    await gasPost({action:'edit',work_code_raw:workCode,data:data});
     const r=RAW_MAP[workCode]; if(r) Object.assign(r,data);
     showToast('Saved \u2713','ok');
   } catch(e){showToast('Save failed: '+e.message,'err');console.error(e);}
 }
 async function saveNewRecord(record) {
-  if(!getGHPat()){showToast('No GitHub token \u2014 open \u2699 Settings','err');return;}
-  if(!getGHOwner()||!getGHRepo()){showToast('Set GitHub owner/repo in Settings','err');return;}
+  if(!getGASUrl()){showToast('No Apps Script URL \u2014 open \u2699 Settings','err');return;}
   try {
     showToast('Saving\u2026');
-    const file=await ghGet('overlay.json');
-    const ov=JSON.parse(atob(file.content.replace(/\n/g,'')));
-    ov.new_records=ov.new_records||[];
     record._manual=true; record._created=new Date().toISOString();
-    ov.new_records.push(record);
-    await ghPut('overlay.json',ov,file.sha,'Add track: '+record.title);
+    await gasPost({action:'new_record',record:record});
     const wc=record.work_code_raw;
     RAW.push(record); RAW_MAP[wc]=record;
     AGG=buildAGG(); filtered=AGG.works.slice(); applyFilters();
@@ -1499,52 +1472,46 @@ function showToast(msg,type) {
 function showLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.remove('hidden');}
 function hideLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.add('hidden');}
 function openSettingsModal(){
-  document.getElementById('gh-owner').value=getGHOwner();
-  document.getElementById('gh-repo').value=getGHRepo();
-  document.getElementById('gh-pat').value=getGHPat();
-  const st=document.getElementById('pat-status'); if(st) st.style.display='none';
+  document.getElementById('gas-url').value=getGASUrl();
+  const st=document.getElementById('gas-status'); if(st) st.style.display='none';
   document.getElementById('settings-modal').classList.remove('hidden');
 }
 function closeSettingsModal(){document.getElementById('settings-modal').classList.add('hidden');}
 function saveSettings(){
-  const owner=document.getElementById('gh-owner').value.trim();
-  const repo=document.getElementById('gh-repo').value.trim();
-  const pat=document.getElementById('gh-pat').value.trim();
-  if(owner)localStorage.setItem(GH_OWNER_KEY,owner);
-  if(repo)localStorage.setItem(GH_REPO_KEY,repo);
-  if(pat)localStorage.setItem(GH_PAT_KEY,pat);
+  const url=document.getElementById('gas-url').value.trim();
+  if(url)localStorage.setItem(GAS_URL_KEY,url);
   closeSettingsModal(); updateEditButtons(); showToast('Settings saved \u2713','ok');
 }
-function clearGHPat(){
-  localStorage.removeItem(GH_PAT_KEY);
-  document.getElementById('gh-pat').value='';
-  const st=document.getElementById('pat-status');
-  if(st){st.textContent='Token cleared.';st.className='pat-status pat-err';st.style.display='';}
+function clearGASUrl(){
+  localStorage.removeItem(GAS_URL_KEY);
+  document.getElementById('gas-url').value='';
+  const st=document.getElementById('gas-status');
+  if(st){st.textContent='URL cleared.';st.className='pat-status pat-err';st.style.display='';}
   updateEditButtons();
 }
-async function testGHConnection(){
-  const pat=document.getElementById('gh-pat').value.trim();
-  const st=document.getElementById('pat-status');
+async function testGASConnection(){
+  const url=document.getElementById('gas-url').value.trim();
+  const st=document.getElementById('gas-status');
   if(!st)return;
-  if(!pat){st.textContent='Enter a PAT first.';st.className='pat-status pat-err';st.style.display='';return;}
+  if(!url){st.textContent='Enter a URL first.';st.className='pat-status pat-err';st.style.display='';return;}
   st.textContent='Testing\u2026';st.className='pat-status';st.style.display='';
   try{
-    const res=await fetch('https://api.github.com/user',{headers:{'Authorization':'token '+pat,'Accept':'application/vnd.github.v3+json'}});
+    const res=await fetch(url+'?action=ping');
     const data=await res.json();
-    if(data.login){st.textContent='\u2713 Connected as '+data.login;st.className='pat-status pat-ok';}
-    else{st.textContent='\u2717 Invalid token';st.className='pat-status pat-err';}
+    if(data.ok){st.textContent='\u2713 Connected';st.className='pat-status pat-ok';}
+    else{st.textContent='\u2717 Unexpected response';st.className='pat-status pat-err';}
   }catch(e){st.textContent='\u2717 '+e.message;st.className='pat-status pat-err';}
   st.style.display='';
 }
 function updateEditButtons(){
-  const hasPat=!!getGHPat();
+  const hasUrl=!!getGASUrl();
   document.querySelectorAll('.edit-toggle-btn').forEach(btn=>{
-    btn.classList.toggle('disabled',!hasPat);
-    btn.title=hasPat?'Edit this track':'Set a GitHub token in Settings to enable editing';
+    btn.classList.toggle('disabled',!hasUrl);
+    btn.title=hasUrl?'Edit this track':'Set Apps Script URL in Settings (\u2699) to enable editing';
   });
 }
 function openAddRecordModal(){
-  if(!getGHPat()){showToast('Set a GitHub token in Settings (\u2699) first.','err');openSettingsModal();return;}
+  if(!getGASUrl()){showToast('Set Apps Script URL in Settings (\u2699) first.','err');openSettingsModal();return;}
   ['nr-title','nr-work-code','nr-artist','nr-release','nr-iswc','nr-master-rh','nr-advance','nr-territory','nr-notes']
     .forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   ['nr-source','nr-contract-status'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
@@ -1599,7 +1566,7 @@ function renderEditForm(workCode){
     '</div></div>';
 }
 function showEditForm(workCode){
-  if(!getGHPat()){showToast('Set a GitHub token in Settings (\u2699) first.','err');return;}
+  if(!getGASUrl()){showToast('Set Apps Script URL in Settings (\u2699) first.','err');return;}
   const ex=document.getElementById('ef-block');
   if(ex){ex.style.display=ex.style.display==='none'?'':'none';return;}
   const body=document.getElementById('modal-body');
