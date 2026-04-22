@@ -1470,7 +1470,7 @@ async function saveOverlayEdit(workCode,data) {
       showToast('Saving\u2026');
       await gasPost({action:'edit',work_code_raw:workCode,data:data});
       showToast('Saved \u2713','ok');
-    }catch(e){showToast('Saved locally (sync failed)','ok');console.warn('GAS sync:',e);}
+    }catch(e){showToast('Sync failed: '+e.message,'err');console.warn('GAS sync:',e);}
   } else {
     showToast('Saved locally \u2713','ok');
   }
@@ -1491,7 +1491,7 @@ async function saveNewRecord(record) {
       showToast('Saving\u2026');
       await gasPost({action:'new_record',record:record});
       showToast('Track added \u2713','ok');
-    }catch(e){showToast('Added locally (sync failed)','ok');console.warn('GAS sync:',e);}
+    }catch(e){showToast('Sync failed: '+e.message,'err');console.warn('GAS sync:',e);}
   } else {
     showToast('Track added locally \u2713','ok');
   }
