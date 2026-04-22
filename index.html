@@ -1374,13 +1374,17 @@ window.addEventListener('DOMContentLoaded', async () => {
   try {
     showLoading();
     const gasUrl = getGASUrl();
+    const overlayFetch = (gasUrl ? fetch(gasUrl + '?action=get') : fetch('overlay.json'))
+      .catch(() => null);
     const [coreRes, overlayRes] = await Promise.all([
       fetch('miyavi_full_merged.json'),
-      gasUrl ? fetch(gasUrl + '?action=get') : fetch('overlay.json')
+      overlayFetch
     ]);
     if (!coreRes.ok) throw new Error('Could not load miyavi_full_merged.json (' + coreRes.status + ')');
     const coreData = await coreRes.json();
-    const overlayData = await overlayRes.json().catch(() => ({edits:{},new_records:[]}));
+    const overlayData = (overlayRes && overlayRes.ok)
+      ? await overlayRes.json().catch(() => ({edits:{},new_records:[]}))
+      : {edits:{},new_records:[]};
     RAW = coreData.compositions || [];
     SPOTIFY_ONLY = coreData.unmatched_spotify || [];
     const _edits = overlayData.edits || {};
