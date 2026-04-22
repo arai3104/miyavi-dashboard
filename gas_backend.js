@@ -9,27 +9,37 @@
 const SS_ID = 'YOUR_SPREADSHEET_ID_HERE'; // ← paste your Spreadsheet ID
 
 function doGet(e) {
-  const action = e && e.parameter && e.parameter.action;
-  if (action === 'ping') {
-    return jsonResponse({ok: true});
+  try {
+    const params = e && e.parameter ? e.parameter : {};
+
+    if (params.action === 'ping') {
+      return jsonResponse({ok: true});
+    }
+
+    // Mutations sent as GET to avoid GAS POST CORS issues
+    if (params.payload) {
+      const payload = JSON.parse(params.payload);
+      if (payload.action === 'edit') {
+        saveEdit(payload.work_code_raw, payload.data);
+        return jsonResponse({ok: true});
+      }
+      if (payload.action === 'new_record') {
+        saveNewRecord(payload.record);
+        return jsonResponse({ok: true});
+      }
+      return jsonResponse({ok: false, error: 'Unknown action'});
+    }
+
+    // Default: return full overlay
+    return jsonResponse(buildOverlay());
+  } catch(err) {
+    return jsonResponse({ok: false, error: err.toString()});
   }
-  // action === 'get' or default: return overlay.json format
-  return jsonResponse(buildOverlay());
 }
 
 function doPost(e) {
-  const payload = JSON.parse(e.postData.contents);
-  const action = payload.action;
-
-  if (action === 'edit') {
-    saveEdit(payload.work_code_raw, payload.data);
-    return jsonResponse({ok: true});
-  }
-  if (action === 'new_record') {
-    saveNewRecord(payload.record);
-    return jsonResponse({ok: true});
-  }
-  return jsonResponse({ok: false, error: 'Unknown action'});
+  // Kept for compatibility but mutations now go through doGet
+  return doGet(e);
 }
 
 function buildOverlay() {
