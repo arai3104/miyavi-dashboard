@@ -287,6 +287,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .edit-toggle-btn.disabled{opacity:.4;cursor:not-allowed;}
 .btn-delete-record{padding:4px 10px;border:1px solid rgba(239,68,68,.4);border-radius:5px;background:rgba(239,68,68,.1);color:#fca5a5;font-size:11px;cursor:pointer;font-weight:600;transition:background .15s;}
 .btn-delete-record:hover{background:rgba(239,68,68,.25);}
+.om-card-wide{max-width:780px;width:96vw;}
+.nr-rh-headers{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1fr 60px 60px 24px;gap:4px;font-size:10px;color:var(--muted);padding:2px 0 4px;}
+.nr-rh-row{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1fr 60px 60px 24px;gap:4px;margin-bottom:4px;}
+.nr-rh-row input,.nr-rh-row select{width:100%;padding:4px 6px;font-size:11px;background:#1e293b;border:1px solid rgba(255,255,255,.1);border-radius:4px;color:#fff;}
+.nr-ump-row{display:grid;grid-template-columns:1fr 1fr 80px 80px 24px;gap:4px;margin-bottom:4px;}
+.nr-ump-row input,.nr-ump-row select{width:100%;padding:4px 6px;font-size:11px;background:#1e293b;border:1px solid rgba(255,255,255,.1);border-radius:4px;color:#fff;}
+.nr-row-del{background:none;border:none;color:#ef4444;cursor:pointer;font-size:14px;padding:0;line-height:1;}
 .master-rights-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;}
 .master-rights-grid .meta-item{display:flex;flex-direction:column;gap:2px;}
 .status-pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;}
@@ -509,8 +516,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 
 <!-- Add Record modal -->
 <div class="overlay-modal hidden" id="add-record-modal" onclick="if(event.target===this)closeAddRecordModal()">
-  <div class="om-card">
+  <div class="om-card om-card-wide">
     <h2>Add New Track <button onclick="closeAddRecordModal()">&#x2715;</button></h2>
+
+    <!-- Basic Info -->
+    <div class="om-section-lbl">Basic Info</div>
     <div class="form-row">
       <div class="form-group"><label>Title <span style="color:#ef4444">*</span></label><input type="text" id="nr-title" placeholder="Track title"></div>
       <div class="form-group"><label>Work Code (JASRAC)</label><input type="text" id="nr-work-code" placeholder="e.g. 1L4-1234-5"></div>
@@ -525,13 +535,76 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
           <option value="">— select —</option>
           <option value="PJ">PJ</option><option value="PE">PE</option>
           <option value="PO">PO</option><option value="PW">PW</option>
-          <option value="SE">SE</option><option value="other">other</option>
+          <option value="SE">SE</option><option value="SV">SV</option>
+          <option value="SM">SM</option><option value="PD">PD</option><option value="other">other</option>
         </select>
       </div>
-      <div class="form-group"><label>ISWC</label><input type="text" id="nr-iswc" placeholder="T-xxx.xxx.xxx-x"></div>
+      <div class="form-group"><label>Status</label>
+        <select id="nr-status">
+          <option value="Manual">Manual</option>
+          <option value="JASRAC">JASRAC</option>
+          <option value="BMI">BMI</option><option value="ASCAP">ASCAP</option>
+        </select>
+      </div>
     </div>
+    <div class="form-row">
+      <div class="form-group"><label>ISWC</label><input type="text" id="nr-iswc" placeholder="T-xxx.xxx.xxx-x"></div>
+      <div class="form-group"><label>Catalog Code</label><input type="text" id="nr-catalog-code" placeholder="e.g. SVC 1073.00"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Contract Date</label><input type="text" id="nr-contract-date" placeholder="e.g. 2020/04/01"></div>
+      <div class="form-group"><label>Track Number</label><input type="text" id="nr-track-number" placeholder="e.g. 3"></div>
+    </div>
+    <div class="form-row full">
+      <div class="form-group"><label>注意作品 (Chui)</label><input type="text" id="nr-chui" placeholder="注意理由など"></div>
+    </div>
+
+    <!-- Rights Holders -->
     <hr class="om-divider">
-    <div class="om-section-lbl">Master &amp; Rights Info</div>
+    <div class="om-section-lbl" style="display:flex;justify-content:space-between;align-items:center;">
+      Rights Holders (JASRAC)
+      <button class="btn-secondary" style="font-size:11px;padding:3px 10px;" onclick="nrAddRH()">+ Add</button>
+    </div>
+    <div id="nr-rh-list">
+      <div class="nr-rh-headers">
+        <span>Name</span><span>RH ID</span><span>Contract Type</span><span>Trust Status</span><span>Org</span><span>Perf%</span><span>Rec%</span><span></span>
+      </div>
+    </div>
+
+    <!-- UMP Publishing -->
+    <hr class="om-divider">
+    <div class="om-section-lbl">UMP Publishing</div>
+    <div class="form-row">
+      <div class="form-group"><label>UMP No.</label><input type="text" id="nr-ump-no" placeholder="e.g. 72"></div>
+      <div class="form-group"><label>Contract Period</label><input type="text" id="nr-ump-period" placeholder="e.g. 10年"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Contract Start</label><input type="text" id="nr-ump-start" placeholder="e.g. 2017/10/1"></div>
+      <div class="form-group"><label>Sub Codes</label><input type="text" id="nr-ump-subcodes" placeholder="e.g. SD9495, SD1234"></div>
+    </div>
+    <div class="om-section-lbl" style="font-size:11px;display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
+      UMP Writers
+      <button class="btn-secondary" style="font-size:11px;padding:3px 10px;" onclick="nrAddUMPWriter()">+ Add</button>
+    </div>
+    <div id="nr-ump-writers">
+      <div class="nr-rh-headers" style="grid-template-columns:1fr 1fr 80px 80px 24px;">
+        <span>Name</span><span>Role</span><span>Share %</span><span>Writer Take</span><span></span>
+      </div>
+    </div>
+
+    <!-- BMG -->
+    <hr class="om-divider">
+    <div class="om-section-lbl">BMG</div>
+    <div class="form-row full">
+      <div class="form-group"><label>Songwriters</label><textarea id="nr-bmg-songwriters" placeholder="Name 20%&#10;Name 20%…" rows="3"></textarea></div>
+    </div>
+    <div class="form-row full">
+      <div class="form-group"><label>Publisher</label><textarea id="nr-bmg-publisher" placeholder="Publisher name and details…" rows="2"></textarea></div>
+    </div>
+
+    <!-- Master Rights -->
+    <hr class="om-divider">
+    <div class="om-section-lbl">Master Rights</div>
     <div class="form-row">
       <div class="form-group"><label>Master Right Holder</label><input type="text" id="nr-master-rh" placeholder="Label / company name"></div>
       <div class="form-group"><label>Contract Status</label>
@@ -552,6 +625,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     <div class="form-row full">
       <div class="form-group"><label>Internal Notes</label><textarea id="nr-notes" placeholder="Team notes about this track…"></textarea></div>
     </div>
+
     <div class="om-footer">
       <button class="btn-secondary" onclick="closeAddRecordModal()">Cancel</button>
       <button class="btn-primary" onclick="submitNewRecord()">Save Track</button>
@@ -1571,25 +1645,104 @@ function updateEditButtons(){
   });
 }
 function openAddRecordModal(){
-  ['nr-title','nr-work-code','nr-artist','nr-release','nr-iswc','nr-master-rh','nr-advance','nr-territory','nr-notes']
+  ['nr-title','nr-work-code','nr-artist','nr-release','nr-iswc','nr-catalog-code',
+   'nr-contract-date','nr-track-number','nr-chui',
+   'nr-ump-no','nr-ump-period','nr-ump-start','nr-ump-subcodes',
+   'nr-bmg-songwriters','nr-bmg-publisher',
+   'nr-master-rh','nr-advance','nr-territory','nr-notes']
     .forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  ['nr-source','nr-contract-status'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['nr-source','nr-status','nr-contract-status'].forEach(id=>{const el=document.getElementById(id);if(el)el.selectedIndex=0;});
   ['nr-license-start','nr-license-end'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  // Clear dynamic rows (keep headers)
+  const rhList=document.getElementById('nr-rh-list');
+  const rhHdr=rhList.querySelector('.nr-rh-headers');
+  rhList.innerHTML=''; rhList.appendChild(rhHdr);
+  const uwList=document.getElementById('nr-ump-writers');
+  const uwHdr=uwList.querySelector('.nr-rh-headers');
+  uwList.innerHTML=''; uwList.appendChild(uwHdr);
   document.getElementById('add-record-modal').classList.remove('hidden');
+}
+function nrAddRH(){
+  const row=document.createElement('div'); row.className='nr-rh-row';
+  row.innerHTML=`
+    <input type="text" placeholder="Name">
+    <input type="text" placeholder="RH ID">
+    <select>
+      <option value="">—</option>
+      <option>作曲</option><option>作詞</option><option>作曲作詞</option>
+      <option>出版者</option><option>サブ出版</option>
+    </select>
+    <select>
+      <option value="">—</option>
+      <option>全信託</option><option>部分信託</option><option>無信託</option><option>演奏M</option>
+    </select>
+    <input type="text" placeholder="JASRAC / BMI…">
+    <input type="text" placeholder="%">
+    <input type="text" placeholder="%">
+    <button class="nr-row-del" onclick="this.parentElement.remove()">✕</button>`;
+  document.getElementById('nr-rh-list').appendChild(row);
+}
+function nrAddUMPWriter(){
+  const row=document.createElement('div'); row.className='nr-ump-row';
+  row.innerHTML=`
+    <input type="text" placeholder="Name">
+    <input type="text" placeholder="Role e.g. 作詞作曲">
+    <input type="text" placeholder="20.00%">
+    <input type="text" placeholder="50%">
+    <button class="nr-row-del" onclick="this.parentElement.remove()">✕</button>`;
+  document.getElementById('nr-ump-writers').appendChild(row);
 }
 function closeAddRecordModal(){document.getElementById('add-record-modal').classList.add('hidden');}
 async function submitNewRecord(){
   const title=document.getElementById('nr-title').value.trim();
   if(!title){alert('Title is required.');return;}
+  const iswc=document.getElementById('nr-iswc').value.trim();
   const wc=document.getElementById('nr-work-code').value.trim()||('manual-'+Date.now());
+  // Collect rights holders
+  const rights_holders=[];
+  document.querySelectorAll('#nr-rh-list .nr-rh-row').forEach((row,i)=>{
+    const inp=row.querySelectorAll('input,select');
+    const name=(inp[0]&&inp[0].value.trim())||''; if(!name) return;
+    rights_holders.push({
+      seq:i+1, name, rh_id:(inp[1]&&inp[1].value.trim())||'',
+      contract_type:(inp[2]&&inp[2].value)||'',
+      trust_status:(inp[3]&&inp[3].value)||'',
+      organization:(inp[4]&&inp[4].value.trim())||'',
+      splits:{split_perf:(inp[5]&&inp[5].value.trim())||'',split_rec:(inp[6]&&inp[6].value.trim())||''},
+      holds:{}
+    });
+  });
+  // Collect UMP writers
+  const ump_writers=[];
+  document.querySelectorAll('#nr-ump-writers .nr-ump-row').forEach(row=>{
+    const inp=row.querySelectorAll('input,select');
+    const name=(inp[0]&&inp[0].value.trim())||''; if(!name) return;
+    ump_writers.push({name,role:(inp[1]&&inp[1].value.trim())||'',share_pct:(inp[2]&&inp[2].value.trim())||'',writer_take:(inp[3]&&inp[3].value.trim())||''});
+  });
+  const umpNo=document.getElementById('nr-ump-no').value.trim();
+  const ump_data=umpNo||ump_writers.length?{
+    ump_no:umpNo,
+    contract_period:document.getElementById('nr-ump-period').value.trim(),
+    contract_start:document.getElementById('nr-ump-start').value.trim(),
+    sub_codes:document.getElementById('nr-ump-subcodes').value.trim().split(/[,\s]+/).filter(Boolean),
+    writers:ump_writers
+  }:null;
+  const bmgSw=document.getElementById('nr-bmg-songwriters').value.trim();
+  const bmgPub=document.getElementById('nr-bmg-publisher').value.trim();
+  const bmg_data=bmgSw||bmgPub?{songwriters:bmgSw,publisher:bmgPub}:null;
   const record={
-    track_number:'',work_code_raw:wc,work_code:wc.replace(/-/g,''),title:title,
+    track_number:document.getElementById('nr-track-number').value.trim(),
+    work_code_raw:wc, work_code:wc.replace(/-/g,''), title,
     primary_artist:document.getElementById('nr-artist').value.trim(),
     release_period:document.getElementById('nr-release').value.trim(),
+    contract_date:document.getElementById('nr-contract-date').value.trim(),
+    catalog_code:document.getElementById('nr-catalog-code').value.trim(),
+    status:document.getElementById('nr-status').value||'Manual',
     source_type:document.getElementById('nr-source').value,
-    iswc_csv:document.getElementById('nr-iswc').value.trim(),
-    iswc_jwid:document.getElementById('nr-iswc').value.trim(),
-    status:'Manual',chui_sakuhin:'',rights_holders:[],dist_holds:[],titles:[],alt_titles:[],
+    iswc_csv:iswc, iswc_jwid:iswc,
+    chui_sakuhin:document.getElementById('nr-chui').value.trim(),
+    rights_holders, dist_holds:[], titles:[], alt_titles:[],
+    ump_data, bmg_data, spotify_recordings:[],
     master_rh:document.getElementById('nr-master-rh').value.trim(),
     master_license_start:document.getElementById('nr-license-start').value,
     master_license_end:document.getElementById('nr-license-end').value,
