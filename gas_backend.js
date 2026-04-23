@@ -92,10 +92,16 @@ function buildOverlay() {
   const nrSheet = ss.getSheetByName('NewRecords');
   if (nrSheet && nrSheet.getLastRow() > 1) {
     const rows = nrSheet.getDataRange().getValues();
+    const nrHeaders = rows[0];
+    const jsonCol = nrHeaders.indexOf('json');
+    const wcCol = nrHeaders.indexOf('work_code_raw');
     for (let i = 1; i < rows.length; i++) {
-      const [wc, title, json] = rows[i];
+      const wc = rows[i][wcCol];
       if (!wc) continue;
-      try { new_records.push(JSON.parse(json)); } catch(e) {}
+      const jsonStr = jsonCol >= 0 ? rows[i][jsonCol] : null;
+      if (jsonStr) {
+        try { new_records.push(JSON.parse(jsonStr)); } catch(e) {}
+      }
     }
   }
 
