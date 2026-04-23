@@ -270,6 +270,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .pat-ok{background:#d1fae5;color:#065f46;}.pat-err{background:#fee2e2;color:#991b1b;}
 .edit-section{margin-top:16px;border-top:1px solid rgba(255,255,255,.12);padding-top:14px;}
 .edit-section h4{font-size:11px;font-weight:700;color:#a5b4fc;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;}
+.ef-section-lbl{font-size:10px;font-weight:700;color:#a5b4fc;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid rgba(165,180,252,.2);}
 .edit-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 .ef-group{display:flex;flex-direction:column;gap:3px;}
 .ef-group.full{grid-column:1/-1;}
@@ -1785,23 +1786,48 @@ async function submitNewRecord(){
 function renderEditForm(workCode){
   const r=RAW_MAP[workCode]||{};
   const cs=r.contract_status||'';
-  return '<div class="edit-section" id="ef-block"><h4>Edit Master &amp; Rights Info</h4>'+
+  const st=r.status||'';
+  const src=r.source_type||'';
+  const wc=workCode.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  const sel=(id,val,opts)=>'<select id="'+id+'">'+opts.map(([v,l])=>'<option value="'+v+'"'+(val===v?' selected':'')+'>'+l+'</option>').join('')+'</select>';
+  return '<div class="edit-section" id="ef-block">'+
+    '<h4 style="margin-bottom:12px;">✏️ Edit Track</h4>'+
+
+    // ── Basic Info ──
+    '<div class="ef-section-lbl">Basic Info</div>'+
+    '<div class="edit-form-grid">'+
+    '<div class="ef-group full"><label>Title</label><input type="text" id="ef-title" value="'+esc(r.title||'')+'" placeholder="Track title"></div>'+
+    '<div class="ef-group"><label>Primary Artist</label><input type="text" id="ef-artist" value="'+esc(r.primary_artist||'')+'" placeholder="ＭＩＹＡＶＩ"></div>'+
+    '<div class="ef-group"><label>Release Period</label><input type="text" id="ef-release" value="'+esc(r.release_period||'')+'" placeholder="e.g. 2024年1-3月期"></div>'+
+    '<div class="ef-group"><label>Source Type</label>'+
+      sel('ef-source',src,[['','— select —'],['PJ','PJ'],['PE','PE'],['PO','PO'],['PW','PW'],['SE','SE'],['SV','SV'],['SM','SM'],['PD','PD'],['other','other']])+
+    '</div>'+
+    '<div class="ef-group"><label>Status</label><input type="text" id="ef-status" value="'+esc(st)+'" placeholder="e.g. 管理中"></div>'+
+    '<div class="ef-group"><label>Contract Date</label><input type="text" id="ef-contract-date" value="'+esc(r.contract_date||'')+'" placeholder="e.g. 2020-04-01"></div>'+
+    '<div class="ef-group"><label>Catalog Code</label><input type="text" id="ef-catalog-code" value="'+esc(r.catalog_code||'')+'" placeholder=""></div>'+
+    '<div class="ef-group"><label>Track Number</label><input type="text" id="ef-track-number" value="'+esc(r.track_number||'')+'" placeholder=""></div>'+
+    '<div class="ef-group"><label>ISWC (J-WID)</label><input type="text" id="ef-iswc-jwid" value="'+esc(r.iswc_jwid||'')+'" placeholder="T-…"></div>'+
+    '<div class="ef-group"><label>ISWC (CSV)</label><input type="text" id="ef-iswc-csv" value="'+esc(r.iswc_csv||'')+'" placeholder="T-…"></div>'+
+    '<div class="ef-group"><label>注意作品 (chui)</label><input type="text" id="ef-chui" value="'+esc(r.chui_sakuhin||'')+'" placeholder="TRUE / blank"></div>'+
+    '</div>'+
+
+    // ── Master Rights ──
+    '<div class="ef-section-lbl" style="margin-top:14px;">Master Recording Rights</div>'+
     '<div class="edit-form-grid">'+
     '<div class="ef-group"><label>Master Right Holder</label><input type="text" id="ef-master-rh" value="'+esc(r.master_rh||'')+'" placeholder="Label / company"></div>'+
-    '<div class="ef-group"><label>Contract Status</label><select id="ef-contract-status">'+
-      '<option value="">\u2014 select \u2014</option>'+
-      '<option value="Active"'+(cs==='Active'?' selected':'')+'>Active</option>'+
-      '<option value="Expired"'+(cs==='Expired'?' selected':'')+'>Expired</option>'+
-      '<option value="Pending"'+(cs==='Pending'?' selected':'')+'>Pending</option>'+
-    '</select></div>'+
+    '<div class="ef-group"><label>Contract Status</label>'+
+      sel('ef-contract-status',cs,[['','— select —'],['Active','Active'],['Expired','Expired'],['Pending','Pending']])+
+    '</div>'+
     '<div class="ef-group"><label>License Start</label><input type="date" id="ef-license-start" value="'+esc(r.master_license_start||'')+'"></div>'+
     '<div class="ef-group"><label>License End</label><input type="date" id="ef-license-end" value="'+esc(r.master_license_end||'')+'"></div>'+
-    '<div class="ef-group"><label>Advance Amount</label><input type="text" id="ef-advance" value="'+esc(r.advance_amount||'')+'" placeholder="e.g. \xa5500,000"></div>'+
+    '<div class="ef-group"><label>Advance Amount</label><input type="text" id="ef-advance" value="'+esc(r.advance_amount||'')+'" placeholder="e.g. ¥500,000"></div>'+
     '<div class="ef-group"><label>Territory</label><input type="text" id="ef-territory" value="'+esc(r.territory||'')+'" placeholder="e.g. WW, JP"></div>'+
-    '<div class="ef-group full"><label>Internal Notes</label><textarea id="ef-internal-notes" placeholder="Team notes\u2026">'+esc(r.internal_notes||'')+'</textarea></div>'+
-    '</div><div class="ef-save-row">'+
+    '<div class="ef-group full"><label>Internal Notes</label><textarea id="ef-internal-notes" placeholder="Team notes…">'+esc(r.internal_notes||'')+'</textarea></div>'+
+    '</div>'+
+
+    '<div class="ef-save-row">'+
     '<button class="btn-ef-cancel" onclick="hideEditForm()">Cancel</button>'+
-    '<button class="btn-ef-save" onclick="doSaveEdit(\''+workCode.replace(/\\/g,'\\\\').replace(/'/g,"\\'")+'\')">Save Changes</button>'+
+    '<button class="btn-ef-save" onclick="doSaveEdit(\''+wc+'\')">Save Changes</button>'+
     '</div></div>';
 }
 function showEditForm(workCode){
@@ -1815,11 +1841,29 @@ function hideEditForm(){const el=document.getElementById('ef-block');if(el)el.st
 async function doSaveEdit(workCode){
   const g=id=>{const el=document.getElementById(id);return el?el.value.trim():'';};
   const data={
-    master_rh:g('ef-master-rh'),master_license_start:g('ef-license-start'),
-    master_license_end:g('ef-license-end'),advance_amount:g('ef-advance'),
-    territory:g('ef-territory'),contract_status:g('ef-contract-status'),
+    // Basic Info
+    title:g('ef-title'),
+    primary_artist:g('ef-artist'),
+    release_period:g('ef-release'),
+    source_type:g('ef-source'),
+    status:g('ef-status'),
+    contract_date:g('ef-contract-date'),
+    catalog_code:g('ef-catalog-code'),
+    track_number:g('ef-track-number'),
+    iswc_jwid:g('ef-iswc-jwid'),
+    iswc_csv:g('ef-iswc-csv'),
+    chui_sakuhin:g('ef-chui'),
+    // Master Rights
+    master_rh:g('ef-master-rh'),
+    master_license_start:g('ef-license-start'),
+    master_license_end:g('ef-license-end'),
+    advance_amount:g('ef-advance'),
+    territory:g('ef-territory'),
+    contract_status:g('ef-contract-status'),
     internal_notes:(document.getElementById('ef-internal-notes')||{}).value||'',
   };
+  // Strip empty strings so we don't overwrite existing data with blanks
+  Object.keys(data).forEach(k=>{ if(data[k]==='') delete data[k]; });
   hideEditForm();
   await saveOverlayEdit(workCode,data);
   openModal(workCode);
