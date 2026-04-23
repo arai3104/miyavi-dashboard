@@ -501,14 +501,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   <div class="om-card">
     <h2>Settings <button onclick="closeSettingsModal()">&#x2715;</button></h2>
     <div class="form-row full"><div class="form-group">
-      <label>Google Apps Script URL</label>
-      <input type="text" id="gas-url" placeholder="https://script.google.com/macros/s/…/exec">
-      <div id="gas-status" class="pat-status"></div>
+      <label>JSONBin Bin ID</label>
+      <input type="text" id="jb-bin-id" placeholder="67f1234abc…">
     </div></div>
-    <p style="font-size:11px;color:var(--muted);margin-top:4px;">Paste the deployed Apps Script web app URL. Stored only in your browser’s localStorage.</p>
+    <div class="form-row full"><div class="form-group">
+      <label>JSONBin API Key (X-Master-Key)</label>
+      <input type="password" id="jb-api-key" placeholder="$2a$10$…">
+      <div id="jb-status" class="pat-status"></div>
+    </div></div>
+    <p style="font-size:11px;color:var(--muted);margin-top:4px;">Get these from <a href="https://jsonbin.io" target="_blank" style="color:var(--accent);">jsonbin.io</a>. Stored in your browser only — share the Bin ID + key with teammates so everyone sees the same data.</p>
     <div class="om-footer">
-      <button class="btn-secondary" onclick="testGASConnection()">Test Connection</button>
-      <button class="btn-secondary" onclick="clearGASUrl()">Clear URL</button>
+      <button class="btn-secondary" onclick="testJBConnection()">Test Connection</button>
+      <button class="btn-secondary" onclick="clearJBConfig()">Clear</button>
       <button class="btn-primary" onclick="saveSettings()">Save</button>
     </div>
   </div>
@@ -1454,34 +1458,37 @@ function closeGlossary(){
 window.addEventListener('DOMContentLoaded', async () => {
   try {
     showLoading();
-    // Use GAS URL from localStorage, or fall back to config.json (shared team config)
-    let gasUrl = getGASUrl();
-    if (!gasUrl) {
+    // Load JSONBin config: localStorage first, then fall back to config.json (shared team config)
+    _jbConfig.bin_id  = localStorage.getItem('miyavi_jb_bin_id')  || '';
+    _jbConfig.api_key = localStorage.getItem('miyavi_jb_api_key') || '';
+    if (!_jbConfig.bin_id || !_jbConfig.api_key) {
       try {
         const cfg = await fetch('config.json').then(r => r.json());
-        if (cfg && cfg.gas_url) {
-          gasUrl = cfg.gas_url;
-          localStorage.setItem(GAS_URL_KEY, gasUrl);
+        if (cfg && cfg.jsonbin_bin_id) {
+          _jbConfig.bin_id  = cfg.jsonbin_bin_id;
+          _jbConfig.api_key = cfg.jsonbin_api_key || '';
+          localStorage.setItem('miyavi_jb_bin_id',  _jbConfig.bin_id);
+          localStorage.setItem('miyavi_jb_api_key', _jbConfig.api_key);
         }
       } catch(e) {}
     }
-    const overlayFetch = (gasUrl ? fetch(gasUrl + '?action=get') : fetch('overlay.json'))
-      .catch(() => null);
-    const [coreRes, overlayRes] = await Promise.all([
-      fetch('miyavi_full_merged.json'),
-      overlayFetch
-    ]);
+
+    // Fetch core data + remote overlay in parallel
+    const coreRes = await fetch('miyavi_full_merged.json');
     if (!coreRes.ok) throw new Error('Could not load miyavi_full_merged.json (' + coreRes.status + ')');
     const coreData = await coreRes.json();
-    const gasOverlay = (overlayRes && overlayRes.ok)
-      ? await overlayRes.json().catch(() => ({edits:{},new_records:[]}))
-      : {edits:{},new_records:[]};
+
+    // Load remote overlay from JSONBin (shared), then layer local edits on top
+    let remoteOverlay = {edits:{}, new_records:[]};
+    if (jbReady()) {
+      try { remoteOverlay = await jbGet(); } catch(e) { console.warn('JSONBin load failed:', e); }
+    }
     const localOverlay = getLocalOverlay();
-    // Merge: GAS is shared source of truth; local edits layered on top
-    const _edits = Object.assign({}, gasOverlay.edits || {});
+    // Merge: remote is shared source of truth; local edits layered on top
+    const _edits = Object.assign({}, remoteOverlay.edits || {});
     Object.entries(localOverlay.edits || {}).forEach(([wc,d]) => { _edits[wc]=Object.assign(_edits[wc]||{},d); });
-    const _newRecs = (gasOverlay.new_records || []).concat(
-      (localOverlay.new_records || []).filter(lr => !(gasOverlay.new_records||[]).some(gr=>gr.work_code_raw===lr.work_code_raw))
+    const _newRecs = (remoteOverlay.new_records || []).concat(
+      (localOverlay.new_records || []).filter(lr => !(remoteOverlay.new_records||[]).some(gr=>gr.work_code_raw===lr.work_code_raw))
     );
     RAW = coreData.compositions || [];
     SPOTIFY_ONLY = coreData.unmatched_spotify || [];
@@ -1531,45 +1538,50 @@ function toggleBmg(id){
 
 
 // ════════════════════════════════════════
-// OVERLAY / GOOGLE APPS SCRIPT BACKEND
+// OVERLAY / JSONBIN BACKEND
 // ════════════════════════════════════════
-const GAS_URL_KEY='miyavi_gas_url';
 const LOCAL_OVERLAY_KEY='miyavi_local_overlay';
 let _currentModalWorkCode='';
-function getGASUrl(){ return localStorage.getItem(GAS_URL_KEY)||''; }
+let _jbConfig={bin_id:'',api_key:''};
+
 function getLocalOverlay(){
   try{return JSON.parse(localStorage.getItem(LOCAL_OVERLAY_KEY))||{edits:{},new_records:[]};}
   catch(e){return {edits:{},new_records:[]};}
 }
 function setLocalOverlay(ov){ localStorage.setItem(LOCAL_OVERLAY_KEY,JSON.stringify(ov)); }
-async function gasPost(payload) {
-  const url=getGASUrl();
-  if(!url) return;
-  // Use GET with encoded payload — GAS POST has CORS issues, GET works fine
-  const r=await fetch(url+'?payload='+encodeURIComponent(JSON.stringify(payload)));
-  if(!r.ok) throw new Error('GAS '+r.status);
+
+function jbReady(){ return !!(_jbConfig.bin_id && _jbConfig.api_key); }
+function jbHeaders(){ return {'X-Master-Key':_jbConfig.api_key,'Content-Type':'application/json','X-Bin-Meta':'false'}; }
+async function jbGet(){
+  const r=await fetch('https://api.jsonbin.io/v3/b/'+_jbConfig.bin_id+'/latest',{headers:jbHeaders()});
+  if(!r.ok) throw new Error('JSONBin GET '+r.status);
+  const d=await r.json(); return d.record||d;
+}
+async function jbPut(overlay){
+  const r=await fetch('https://api.jsonbin.io/v3/b/'+_jbConfig.bin_id,{method:'PUT',headers:jbHeaders(),body:JSON.stringify(overlay)});
+  if(!r.ok) throw new Error('JSONBin PUT '+r.status);
   return r.json();
 }
+
 async function saveOverlayEdit(workCode,data) {
-  // Always save locally first
+  // Save locally first
   const ov=getLocalOverlay();
   ov.edits[workCode]=Object.assign(ov.edits[workCode]||{},data);
   setLocalOverlay(ov);
   const r=RAW_MAP[workCode]; if(r) Object.assign(r,data);
-  // Try GAS sync if configured
-  if(getGASUrl()){
-    try{
-      showToast('Saving\u2026');
-      await gasPost({action:'edit',work_code_raw:workCode,data:data});
-      showToast('Saved \u2713','ok');
-    }catch(e){showToast('Sync failed: '+e.message,'err');console.warn('GAS sync:',e);}
-  } else {
-    showToast('Saved locally \u2713','ok');
-  }
+  if(!jbReady()){showToast('Saved locally \u2713','ok');return;}
+  try{
+    showToast('Saving\u2026');
+    const remote=await jbGet();
+    remote.edits=remote.edits||{};
+    remote.edits[workCode]=Object.assign(remote.edits[workCode]||{},data);
+    await jbPut(remote);
+    showToast('Saved \u2713','ok');
+  }catch(e){showToast('Sync failed: '+e.message,'err');console.warn('JSONBin sync:',e);}
 }
 async function saveNewRecord(record) {
   record._manual=true; record._created=new Date().toISOString();
-  // Always save locally first
+  // Save locally first
   const ov=getLocalOverlay();
   ov.new_records=ov.new_records||[];
   ov.new_records.push(record);
@@ -1577,35 +1589,34 @@ async function saveNewRecord(record) {
   const wc=record.work_code_raw;
   RAW.push(record); RAW_MAP[wc]=record;
   AGG=buildAGG(); filtered=AGG.works.slice(); applyFilters();
-  // Try GAS sync if configured
-  if(getGASUrl()){
-    try{
-      showToast('Saving\u2026');
-      await gasPost({action:'new_record',record:record});
-      showToast('Track added \u2713','ok');
-    }catch(e){showToast('Sync failed: '+e.message,'err');console.warn('GAS sync:',e);}
-  } else {
-    showToast('Track added locally \u2713','ok');
-  }
+  if(!jbReady()){showToast('Track added locally \u2713','ok');return;}
+  try{
+    showToast('Saving\u2026');
+    const remote=await jbGet();
+    remote.new_records=remote.new_records||[];
+    remote.new_records.push(record);
+    await jbPut(remote);
+    showToast('Track added \u2713','ok');
+  }catch(e){showToast('Sync failed: '+e.message,'err');console.warn('JSONBin sync:',e);}
 }
 async function deleteRecord(workCode) {
-  if(!confirm('Hide "'+workCode+'" from the dashboard? (Can be restored by removing the _deleted flag in the spreadsheet)')) return;
-  // Save locally
+  if(!confirm('Hide "'+workCode+'" from the dashboard?')) return;
   const ov=getLocalOverlay();
   ov.edits[workCode]=Object.assign(ov.edits[workCode]||{},{_deleted:true});
   setLocalOverlay(ov);
-  // Remove from in-memory arrays
   const idx=RAW.findIndex(r=>r.work_code_raw===workCode);
   if(idx>=0) RAW.splice(idx,1);
   delete RAW_MAP[workCode];
   AGG=buildAGG(); filtered=AGG.works.slice(); applyFilters();
   closeModalBtn();
   showToast('Record hidden \u2713','ok');
-  // Sync to GAS
-  if(getGASUrl()){
-    try{ await gasPost({action:'edit',work_code_raw:workCode,data:{_deleted:true}}); }
-    catch(e){ console.warn('GAS delete sync:',e); }
-  }
+  if(!jbReady()) return;
+  try{
+    const remote=await jbGet();
+    remote.edits=remote.edits||{};
+    remote.edits[workCode]=Object.assign(remote.edits[workCode]||{},{_deleted:true});
+    await jbPut(remote);
+  }catch(e){console.warn('JSONBin delete sync:',e);}
 }
 let _toastTimer;
 function showToast(msg,type) {
@@ -1617,34 +1628,40 @@ function showToast(msg,type) {
 function showLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.remove('hidden');}
 function hideLoading(){const el=document.getElementById('loading-overlay');if(el)el.classList.add('hidden');}
 function openSettingsModal(){
-  document.getElementById('gas-url').value=getGASUrl();
-  const st=document.getElementById('gas-status'); if(st) st.style.display='none';
+  document.getElementById('jb-bin-id').value=_jbConfig.bin_id||'';
+  document.getElementById('jb-api-key').value=_jbConfig.api_key||'';
+  const st=document.getElementById('jb-status'); if(st) st.style.display='none';
   document.getElementById('settings-modal').classList.remove('hidden');
 }
 function closeSettingsModal(){document.getElementById('settings-modal').classList.add('hidden');}
 function saveSettings(){
-  const url=document.getElementById('gas-url').value.trim();
-  if(url)localStorage.setItem(GAS_URL_KEY,url);
+  _jbConfig.bin_id  = document.getElementById('jb-bin-id').value.trim();
+  _jbConfig.api_key = document.getElementById('jb-api-key').value.trim();
+  if(_jbConfig.bin_id)  localStorage.setItem('miyavi_jb_bin_id',  _jbConfig.bin_id);
+  if(_jbConfig.api_key) localStorage.setItem('miyavi_jb_api_key', _jbConfig.api_key);
   closeSettingsModal(); updateEditButtons(); showToast('Settings saved \u2713','ok');
 }
-function clearGASUrl(){
-  localStorage.removeItem(GAS_URL_KEY);
-  document.getElementById('gas-url').value='';
-  const st=document.getElementById('gas-status');
-  if(st){st.textContent='URL cleared.';st.className='pat-status pat-err';st.style.display='block';}
+function clearJBConfig(){
+  _jbConfig={bin_id:'',api_key:''};
+  localStorage.removeItem('miyavi_jb_bin_id');
+  localStorage.removeItem('miyavi_jb_api_key');
+  document.getElementById('jb-bin-id').value='';
+  document.getElementById('jb-api-key').value='';
+  const st=document.getElementById('jb-status');
+  if(st){st.textContent='Cleared.';st.className='pat-status pat-err';st.style.display='block';}
   updateEditButtons();
 }
-async function testGASConnection(){
-  const url=document.getElementById('gas-url').value.trim();
-  const st=document.getElementById('gas-status');
+async function testJBConnection(){
+  const binId  = document.getElementById('jb-bin-id').value.trim();
+  const apiKey = document.getElementById('jb-api-key').value.trim();
+  const st=document.getElementById('jb-status');
   if(!st)return;
-  if(!url){st.textContent='Enter a URL first.';st.className='pat-status pat-err';st.style.display='block';return;}
+  if(!binId||!apiKey){st.textContent='Enter Bin ID and API Key first.';st.className='pat-status pat-err';st.style.display='block';return;}
   st.textContent='Testing\u2026';st.className='pat-status';st.style.display='block';
   try{
-    const res=await fetch(url+'?action=ping');
-    const data=await res.json();
-    if(data.ok){st.textContent='\u2713 Connected';st.className='pat-status pat-ok';}
-    else{st.textContent='\u2717 Unexpected response';st.className='pat-status pat-err';}
+    const r=await fetch('https://api.jsonbin.io/v3/b/'+binId+'/latest',{headers:{'X-Master-Key':apiKey,'X-Bin-Meta':'false'}});
+    if(r.ok){st.textContent='\u2713 Connected';st.className='pat-status pat-ok';}
+    else{st.textContent='\u2717 Error '+r.status+' — check Bin ID and API Key';st.className='pat-status pat-err';}
   }catch(e){st.textContent='\u2717 '+e.message;st.className='pat-status pat-err';}
   st.style.display='block';
 }
