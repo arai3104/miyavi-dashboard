@@ -93,12 +93,16 @@ function buildOverlay() {
   if (nrSheet && nrSheet.getLastRow() > 1) {
     const rows = nrSheet.getDataRange().getValues();
     const nrHeaders = rows[0];
-    const jsonCol = nrHeaders.indexOf('json');
     const wcCol = nrHeaders.indexOf('work_code_raw');
     for (let i = 1; i < rows.length; i++) {
       const wc = rows[i][wcCol];
       if (!wc) continue;
-      const jsonStr = jsonCol >= 0 ? rows[i][jsonCol] : null;
+      // Find JSON: scan from last column backwards for a cell starting with '{'
+      let jsonStr = null;
+      for (let c = rows[i].length - 1; c >= 0; c--) {
+        const v = rows[i][c] ? rows[i][c].toString().trim() : '';
+        if (v.startsWith('{')) { jsonStr = v; break; }
+      }
       if (jsonStr) {
         try { new_records.push(JSON.parse(jsonStr)); } catch(e) {}
       }
@@ -152,17 +156,24 @@ function saveEdit(workCode, data) {
   });
 }
 
+const NR_HEADERS = [
+  'work_code_raw','title','primary_artist','release_period','source_type','iswc',
+  'master_rh','master_license_start','master_license_end',
+  'advance_amount','territory','contract_status','internal_notes',
+  'created_at','json'
+];
 function saveNewRecord(record) {
   const ss = SpreadsheetApp.openById(SS_ID);
   let sheet = ss.getSheetByName('NewRecords');
   if (!sheet) {
     sheet = ss.insertSheet('NewRecords');
-    sheet.appendRow([
-      'work_code_raw','title','primary_artist','release_period','source_type','iswc',
-      'master_rh','master_license_start','master_license_end',
-      'advance_amount','territory','contract_status','internal_notes',
-      'created_at','json'
-    ]);
+    sheet.appendRow(NR_HEADERS);
+  } else {
+    // Update headers if sheet has old format (fewer columns)
+    const existingHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    if (existingHeaders.length < NR_HEADERS.length) {
+      sheet.getRange(1, 1, 1, NR_HEADERS.length).setValues([NR_HEADERS]);
+    }
   }
   sheet.appendRow([
     record.work_code_raw || '',
