@@ -1454,7 +1454,17 @@ function closeGlossary(){
 window.addEventListener('DOMContentLoaded', async () => {
   try {
     showLoading();
-    const gasUrl = getGASUrl();
+    // Use GAS URL from localStorage, or fall back to config.json (shared team config)
+    let gasUrl = getGASUrl();
+    if (!gasUrl) {
+      try {
+        const cfg = await fetch('config.json').then(r => r.json());
+        if (cfg && cfg.gas_url) {
+          gasUrl = cfg.gas_url;
+          localStorage.setItem(GAS_URL_KEY, gasUrl);
+        }
+      } catch(e) {}
+    }
     const overlayFetch = (gasUrl ? fetch(gasUrl + '?action=get') : fetch('overlay.json'))
       .catch(() => null);
     const [coreRes, overlayRes] = await Promise.all([
