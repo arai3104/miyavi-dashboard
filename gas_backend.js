@@ -151,33 +151,62 @@ function saveNewRecord(record) {
   let sheet = ss.getSheetByName('NewRecords');
   if (!sheet) {
     sheet = ss.insertSheet('NewRecords');
-    sheet.appendRow(['work_code_raw', 'title', 'json', 'created_at']);
+    sheet.appendRow([
+      'work_code_raw','title','primary_artist','release_period','source_type','iswc',
+      'master_rh','master_license_start','master_license_end',
+      'advance_amount','territory','contract_status','internal_notes',
+      'created_at','json'
+    ]);
   }
-  sheet.appendRow([record.work_code_raw || '', record.title || '', JSON.stringify(record), new Date().toISOString()]);
+  sheet.appendRow([
+    record.work_code_raw || '',
+    record.title || '',
+    record.primary_artist || '',
+    record.release_period || '',
+    record.source_type || '',
+    record.iswc_csv || record.iswc_jwid || '',
+    record.master_rh || '',
+    record.master_license_start || '',
+    record.master_license_end || '',
+    record.advance_amount || '',
+    record.territory || '',
+    record.contract_status || '',
+    record.internal_notes || '',
+    new Date().toISOString(),
+    JSON.stringify(record)  // full record kept for reference
+  ]);
 }
 
 // ── Run this ONCE from the Apps Script editor to populate the Works sheet ──
 function populateInitialData() {
-  const url = 'https://arai3104.github.io/miyavi-dashboard/miyavi_full_merged.json';
-  const resp = UrlFetchApp.fetch(url);
-  const data = JSON.parse(resp.getContentText());
-  const compositions = data.compositions || [];
+  try {
+    Logger.log('Step 1: fetching JSON...');
+    const url = 'https://arai3104.github.io/miyavi-dashboard/miyavi_full_merged.json';
+    const resp = UrlFetchApp.fetch(url, {muteHttpExceptions: true});
+    Logger.log('HTTP status: ' + resp.getResponseCode());
+    const text = resp.getContentText();
+    Logger.log('Content length: ' + text.length + ' chars');
+    const data = JSON.parse(text);
+    const compositions = data.compositions || [];
+    Logger.log('Compositions found: ' + compositions.length);
 
-  const ss = SpreadsheetApp.openById(SS_ID);
-  let sheet = ss.getSheetByName('Works');
-  if (sheet) ss.deleteSheet(sheet);
-  sheet = ss.insertSheet('Works');
-
-  sheet.appendRow(WORKS_HEADERS);
-  const rows = compositions.map(c => WORKS_HEADERS.map(h => {
-    const v = c[h];
-    return (v === null || v === undefined) ? '' : v;
-  }));
-  if (rows.length > 0) {
-    sheet.getRange(2, 1, rows.length, WORKS_HEADERS.length).setValues(rows);
+    Logger.log('Step 2: writing to Works sheet...');
+    const ss = SpreadsheetApp.openById(SS_ID);
+    let sheet = ss.getSheetByName('Works');
+    if (sheet) ss.deleteSheet(sheet);
+    sheet = ss.insertSheet('Works');
+    sheet.appendRow(WORKS_HEADERS);
+    const rows = compositions.map(c => WORKS_HEADERS.map(h => {
+      const v = c[h];
+      return (v === null || v === undefined) ? '' : v;
+    }));
+    if (rows.length > 0) {
+      sheet.getRange(2, 1, rows.length, WORKS_HEADERS.length).setValues(rows);
+    }
+    Logger.log('Done: ' + rows.length + ' tracks written.');
+  } catch(err) {
+    Logger.log('ERROR: ' + err.toString());
   }
-
-  Logger.log('Done: ' + rows.length + ' tracks written to Works sheet.');
 }
 
 function jsonResponse(data) {
