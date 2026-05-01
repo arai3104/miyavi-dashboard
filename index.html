@@ -306,6 +306,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .btn-settings{padding:5px 10px;border:1px solid rgba(255,255,255,.2);border-radius:5px;background:rgba(255,255,255,.07);color:rgba(255,255,255,.75);font-size:15px;cursor:pointer;line-height:1;}
 .btn-settings:hover{background:rgba(255,255,255,.15);}
 .badge-manual{display:inline-flex;align-items:center;font-size:10px;padding:2px 6px;border-radius:10px;background:rgba(251,191,36,.15);color:#f59e0b;border:1px solid rgba(251,191,36,.4);font-weight:600;white-space:nowrap;}
+.art-cell{width:44px;padding:3px 6px !important;}
+.art-thumb{width:38px;height:38px;border-radius:5px;object-fit:cover;display:block;background:#e2e8f0;}
+.art-thumb.no-art{background:#f1f5f9;display:flex;align-items:center;justify-content:center;}
+.art-thumb:not([src]),.art-thumb[src=""]{background:#f1f5f9;}
 </style>
 </head>
 <body>
@@ -892,6 +896,38 @@ function updateStaticCharts(){
 
 
 // ---- Works Table ----
+// ── Cover Art (Spotify oEmbed, lazy-loaded) ──────────────────────────────
+const _artCache={};
+(()=>{try{Object.assign(_artCache,JSON.parse(localStorage.getItem('miyavi_art_v1')||'{}'));}catch(e){}})();
+function _saveArtCache(){try{localStorage.setItem('miyavi_art_v1',JSON.stringify(_artCache));}catch(e){}}
+async function _fetchArt(url){
+  if(_artCache[url]!==undefined) return _artCache[url];
+  try{
+    const r=await fetch('https://open.spotify.com/oembed?url='+encodeURIComponent(url));
+    const img=r.ok?(await r.json()).thumbnail_url||'':'';
+    _artCache[url]=img; _saveArtCache(); return img;
+  }catch(e){_artCache[url]='';return '';}
+}
+let _artObs=null;
+function initArtObserver(){
+  if(_artObs) _artObs.disconnect();
+  _artObs=new IntersectionObserver(entries=>{
+    entries.forEach(async entry=>{
+      if(!entry.isIntersecting) return;
+      const img=entry.target;
+      if(img.dataset.loaded) return;
+      img.dataset.loaded='1';
+      _artObs.unobserve(img);
+      const src=await _fetchArt(img.dataset.surl);
+      if(src) img.src=src;
+    });
+  },{rootMargin:'120px'});
+  document.querySelectorAll('img.art-thumb[data-surl]').forEach(img=>{
+    if(_artCache[img.dataset.surl]){img.src=_artCache[img.dataset.surl];img.dataset.loaded='1';}
+    else _artObs.observe(img);
+  });
+}
+
 let tblData=[];
 // Normalize half-width/full-width (NFKC) and lowercase for search comparison
 const norm = s => String(s||'').normalize('NFKC').toLowerCase();
@@ -909,13 +945,15 @@ function renderTable(){
     {k:'chui',lbl:'注意'},{k:'rights_holders_count',lbl:'# RH'}
   ];
   const arr=c=>sortCol===c?(sortDir===-1?'▼':'▲'):'';
-  let h='<table class="data-table"><thead><tr>';
+  let h='<table class="data-table"><thead><tr><th class="art-cell"></th>';
   cols.forEach(c=>{ h+=`<th onclick="setSort('${c.k}')">${c.lbl} ${arr(c.k)}</th>`; });
   h+='</tr></thead><tbody>';
   pg.forEach(w=>{
     if(w._spotify_only){
       const s=w._spo||{};
+      const _surl=s.spotify_url||'';
       h+=`<tr class="clickable tr-spo" onclick="openSpoModal('${s.isrc||s.track_title||''}')">`;
+      h+=`<td class="art-cell">${_surl?`<img class="art-thumb" data-surl="${esc(_surl)}" src="" alt="">`:'<div class="art-thumb" style="background:#f1f5f9;"></div>'}</td>`;
       h+=`<td style="font-family:monospace;font-size:11px;color:#6b7280;">${esc(s.isrc||'')}</td>`;
       const _sn=getNote('spo:'+(s.isrc||s.track_title||'unknown'));
       const _stag=getTag('spo:'+(s.isrc||s.track_title||'unknown'));
@@ -932,7 +970,10 @@ function renderTable(){
       h+=`<td style="text-align:right;color:#9ca3af;">—</td>`;
       h+='</tr>';
     } else {
+      const _raw=RAW_MAP[w.work_code_raw]||RAW_MAP[w.work_code]||{};
+      const _surl=((_raw.spotify_recordings||[])[0]||{}).spotify_url||'';
       h+=`<tr class="clickable" onclick="openModal('${esc(w.work_code)}')">`;
+      h+=`<td class="art-cell">${_surl?`<img class="art-thumb" data-surl="${esc(_surl)}" src="" alt="">`:'<div class="art-thumb" style="background:#f1f5f9;"></div>'}</td>`;
       h+=`<td style="font-family:monospace;font-size:11px;">${esc(w.work_code)}</td>`;
       const _wn=getNote(w.work_code);
       const _wtag=getTag(w.work_code);
@@ -952,6 +993,7 @@ function renderTable(){
   });
   h+='</tbody></table>';
   $('tbl-container').innerHTML=h;
+  initArtObserver();
   $('pager-info').textContent=`Showing ${start+1}–${end} of ${tblData.length}`;
   $('btn-prev').disabled=page===0;
   $('btn-next').disabled=end>=tblData.length;
