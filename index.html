@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MIYAVI — JASRAC / J-WID Rights Dashboard</title>
+<title>MIYAVI Publishing / Master Rights Management System</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
 <style>
 :root{
@@ -313,18 +313,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 
 <header class="hdr">
   <div>
-    <h1>MIYAVI — <span>JASRAC / J-WID</span> Rights Dashboard</h1>
+    <h1>MIYAVI — <span>Publishing / Master Rights</span> Management System</h1>
     <div class="hdr-sub">266 registered works + 24 Spotify-only tracks · J-WID scrape + JASRAC CSV · Click any row for full details</div>
   </div>
   <div class="filters">
     <div class="fg"><label>Year</label>
       <div class="ms-wrap" id="ms-year"><div class="ms-trigger" onclick="toggleMs('year')"><span class="ms-lbl" id="ms-lbl-year">All Years</span><span class="ms-arrow">▾</span></div><div class="ms-drop" id="ms-drop-year"></div></div>
-    </div>
-    <div class="fg"><label>Source</label>
-      <div class="ms-wrap" id="ms-src"><div class="ms-trigger" onclick="toggleMs('src')"><span class="ms-lbl" id="ms-lbl-src">All Types</span><span class="ms-arrow">▾</span></div><div class="ms-drop" id="ms-drop-src"></div></div>
-    </div>
-    <div class="fg"><label>Trust</label>
-      <div class="ms-wrap" id="ms-trust"><div class="ms-trigger" onclick="toggleMs('trust')"><span class="ms-lbl" id="ms-lbl-trust">All</span><span class="ms-arrow">▾</span></div><div class="ms-drop" id="ms-drop-trust"></div></div>
     </div>
     <div class="fg"><label>Holds</label>
       <select id="f-holds" onchange="applyFilters()">
@@ -336,7 +330,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
         <option value="">All</option><option value="spotify">♫ Spotify Only</option><option value="jasrac">JASRAC Only</option><option value="cover">🎤 Cover Songs</option><option value="ext">✍️ For Other Artists</option>
       </select>
     </div>
-    <div class="fg"><label>Cowriter</label>
+    <div class="fg"><label>Rights Holder</label>
       <div class="ms-wrap" id="ms-cw"><div class="ms-trigger" onclick="toggleMs('cw')"><span class="ms-lbl" id="ms-lbl-cw">All</span><span class="ms-arrow">▾</span></div><div class="ms-drop" id="ms-drop-cw"></div></div>
     </div>
     <button class="btn-reset" onclick="resetFilters()">Reset</button>
@@ -349,7 +343,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 
 <div class="tabs">
   <button class="tab active" onclick="switchTab('overview',this)">Overview</button>
-  <button class="tab" onclick="switchTab('rights',this)">Rights & Splits</button>
   <button class="tab" onclick="switchTab('works',this)">Works Table</button>
 </div>
 
@@ -363,10 +356,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   </div>
   <div class="chart-row r2">
     <div class="cb tall"><h3>Works by Release Year</h3><canvas id="ch-years"></canvas></div>
-    <div class="cb"><h3>Source Type Breakdown <small>work origin</small></h3><canvas id="ch-src"></canvas></div>
-  </div>
-  <div class="chart-row r2">
-    <div class="cb tall"><h3>Top Co-writers <small>by works count</small></h3><canvas id="ch-cowriters"></canvas></div>
     <div class="cb tall"><h3>Top Publishers <small>出版者 / サブ出版</small></h3><canvas id="ch-pubs"></canvas></div>
   </div>
 </div>
@@ -388,25 +377,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     </div>
   </div>
 
-<!-- TAB: RIGHTS -->
-<div id="tab-rights" class="tab-panel">
-  <div class="kpi-row">
-    <div class="kpi ok"><div class="kpi-lbl">全信託 Works</div><div class="kpi-val" id="kpi-trust-full">—</div><div class="kpi-sub">Full JASRAC trust</div></div>
-    <div class="kpi"><div class="kpi-lbl">Avg Perf Split</div><div class="kpi-val" id="kpi-avg-perf">—</div><div class="kpi-sub">MIYAVI 演奏 pts</div></div>
-    <div class="kpi"><div class="kpi-lbl">Avg Rec Split</div><div class="kpi-val" id="kpi-avg-rec">—</div><div class="kpi-sub">MIYAVI 録音 pts</div></div>
-    <div class="kpi danger"><div class="kpi-lbl">Works w/ Holds</div><div class="kpi-val" id="kpi-holds2">—</div><div class="kpi-sub">未 distribution flags</div></div>
-  </div>
-  <div class="chart-row r2">
-    <div class="cb"><h3>MIYAVI 演奏 Split Distribution <small>performance pts</small></h3><canvas id="ch-perf"></canvas></div>
-    <div class="cb"><h3>Trust Status <small>信託区分</small></h3><canvas id="ch-trust"></canvas></div>
-  </div>
-  <div class="chart-row" style="grid-template-columns:1fr;">
-    <div class="cb">
-      <h3>Works with Distribution Holds (未)</h3>
-      <div id="holds-table"></div>
-    </div>
-  </div>
-</div>
 
 <!-- TAB: WORKS TABLE -->
 <div id="tab-works" class="tab-panel">
@@ -433,7 +403,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   </div>
 </div>
 
-<div class="footer">MIYAVI J-WID Rights Dashboard · JASRAC / J-WID scrape · 2026</div>
+<div class="footer">MIYAVI Publishing / Master Rights Management System · 2026</div>
 </div>
 
 <!-- ===================== GLOSSARY MODAL ===================== -->
@@ -953,7 +923,7 @@ function renderHoldsTable(){
   const f=filtered.filter(w=>w.holds>0);
   const el=$('holds-table');
   if(!f.length){el.innerHTML='<p class="no-data">No distribution holds in current filter.</p>';return;}
-  let h='<table class="data-table"><thead><tr><th>Work Code</th><th>Title</th><th>Year</th><th>Type</th><th>Perf Split</th><th>Hold Count</th></tr></thead><tbody>';
+  let h='<table class="data-table"><thead><tr><th>Work Code</th><th>Title</th><th>Year</th><th>Reg. Type</th><th>Perf Split</th><th>Hold Count</th></tr></thead><tbody>';
   f.forEach(w=>{
     h+=`<tr class="clickable" onclick="openModal('${esc(w.work_code)}')">
       <td style="font-family:monospace;font-size:11px;">${esc(w.work_code)}</td>
@@ -978,7 +948,7 @@ function renderTable(){
   const start=page*PAGE_SIZE, end=Math.min(start+PAGE_SIZE,tblData.length), pg=tblData.slice(start,end);
   const cols=[
     {k:'work_code',lbl:'Work Code'},{k:'title',lbl:'Title'},{k:'year',lbl:'Year'},
-    {k:'source_type',lbl:'Type'},{k:'iswc',lbl:'ISWC'},
+    {k:'source_type',lbl:'Reg. Type'},{k:'iswc',lbl:'ISWC'},
     {k:'split_perf',lbl:'Perf'},{k:'split_rec',lbl:'Rec'},
     {k:'trust_status',lbl:'Trust'},{k:'holds',lbl:'Holds'},
     {k:'chui',lbl:'注意'},{k:'rights_holders_count',lbl:'# RH'}
