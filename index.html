@@ -812,11 +812,7 @@ document.addEventListener('click',e=>{
 function populateFilters(){
   const years=[...new Set(AGG.works.map(w=>w.year).filter(Boolean))].sort();
   buildMs('year',years);
-  const srcs=[...new Set(AGG.works.map(w=>w.source_type).filter(Boolean))].sort();
-  buildMs('src',srcs);
-  const trusts=[...new Set(AGG.works.map(w=>w.trust_status).filter(Boolean))].sort();
-  buildMs('trust',trusts);
-  // Cowriter: top ~30 by frequency
+  // Rights Holder: top ~30 by frequency
   const cwCounts={};
   RAW.forEach(r=>(r.rights_holders||[]).forEach(rh=>{
     if(rh.rh_id_norm!==MIYAVI_RH_ID&&rh.rh_id!==MIYAVI_RH_ID&&rh.name&&rh.name.trim())
@@ -826,14 +822,12 @@ function populateFilters(){
   buildMs('cw',topCw);
 }
 function applyFilters(){
-  const yrs=getMs('year'), srcs=getMs('src'), trusts=getMs('trust');
+  const yrs=getMs('year');
   const holds=$('f-holds').value;
   const spo=$('f-spo').value;
   const cws=getMs('cw');
   filtered=AGG.works.filter(w=>{
     if(yrs.length && !yrs.includes(w.year)) return false;
-    if(srcs.length && !srcs.includes(w.source_type)) return false;
-    if(trusts.length && !trusts.includes(w.trust_status)) return false;
     if(holds==='yes' && !w.holds) return false;
     if(holds==='no' && w.holds) return false;
     if(spo==='spotify' && !w._spotify_only) return false;
@@ -852,12 +846,12 @@ function applyFilters(){
     return true;
   });
   page=0;
-  updateKPIs(); updateCharts(); updateRightsKPIs(); renderHoldsTable(); renderTable();
+  updateKPIs(); updateCharts(); renderTable();
 }
 // initialise note count on load
 document.addEventListener('DOMContentLoaded',()=>updateNoteCount());
 function resetFilters(){
-  ['year','src','trust','cw'].forEach(id=>clearMs(id));
+  ['year','cw'].forEach(id=>clearMs(id));
   $('f-holds').value='';
   $('f-spo').value='';
   applyFilters();
@@ -870,14 +864,6 @@ function updateKPIs(){ updateTagCounts();
   $('kpi-iswc').textContent=f.filter(w=>w.iswc).length;
   $('kpi-chui').textContent=f.filter(w=>w.chui).length;
   $('kpi-holds').textContent=f.filter(w=>w.holds>0).length;
-}
-function updateRightsKPIs(){
-  const f=filtered;
-  $('kpi-trust-full').textContent=f.filter(w=>w.trust_status==='全信託').length;
-  $('kpi-holds2').textContent=f.filter(w=>w.holds>0).length;
-  const pa=avg(f.map(w=>w.split_perf)), ra=avg(f.map(w=>w.split_rec));
-  $('kpi-avg-perf').textContent=pa?pa.toFixed(1):'—';
-  $('kpi-avg-rec').textContent=ra?ra.toFixed(1):'—';
 }
 
 // ---- Charts ----
@@ -898,43 +884,12 @@ function updateCharts(){
   const ym={};f.forEach(w=>{if(w.year)ym[w.year]=(ym[w.year]||0)+1;});
   const ys=Object.keys(ym).sort();
   mkBar('ch-years',ys,ys.map(y=>ym[y]),{horiz:false,colors:ys.map(()=>'#6366f1CC')});
-  // Source
-  const sm={};f.forEach(w=>{const s=w.source_type||'Unknown';sm[s]=(sm[s]||0)+1;});
-  const sl=Object.keys(sm).sort((a,b)=>sm[b]-sm[a]);
-  mkDoughnut('ch-src',sl,sl.map(s=>sm[s]));
-  // Perf dist
-  const pb={'1-10':0,'11-25':0,'26-50':0,'51-100':0,'100+':0};
-  f.forEach(w=>{const v=parseFloat(w.split_perf);if(isNaN(v))return;if(v<=10)pb['1-10']++;else if(v<=25)pb['11-25']++;else if(v<=50)pb['26-50']++;else if(v<=100)pb['51-100']++;else pb['100+']++;});
-  mkBar('ch-perf',Object.keys(pb),Object.values(pb),{horiz:false,colors:['#6366f1CC','#6366f1CC','#6366f1CC','#6366f1CC','#ef4444CC']});
-  // Trust
-  const tm={};f.forEach(w=>{if(w.trust_status){tm[w.trust_status]=(tm[w.trust_status]||0)+1;}});
-  const tl=Object.keys(tm).sort((a,b)=>tm[b]-tm[a]);
-  mkDoughnut('ch-trust',tl,tl.map(t=>tm[t]));
 }
 function updateStaticCharts(){
-  const cw=AGG.cowriters.slice(0,12);
-  mkBar('ch-cowriters',cw.map(x=>x.name),cw.map(x=>x.count),{horiz:true});
   const pb=AGG.publishers.slice(0,10);
   mkBar('ch-pubs',pb.map(x=>x.name),pb.map(x=>x.count),{horiz:true});
 }
 
-// ---- Holds table ----
-function renderHoldsTable(){
-  const f=filtered.filter(w=>w.holds>0);
-  const el=$('holds-table');
-  if(!f.length){el.innerHTML='<p class="no-data">No distribution holds in current filter.</p>';return;}
-  let h='<table class="data-table"><thead><tr><th>Work Code</th><th>Title</th><th>Year</th><th>Reg. Type</th><th>Perf Split</th><th>Hold Count</th></tr></thead><tbody>';
-  f.forEach(w=>{
-    h+=`<tr class="clickable" onclick="openModal('${esc(w.work_code)}')">
-      <td style="font-family:monospace;font-size:11px;">${esc(w.work_code)}</td>
-      <td>${esc(w.title)}</td><td>${esc(w.year)}</td>
-      <td>${badge(w.source_type)}</td>
-      <td>${w.split_perf||'—'}</td>
-      <td><span class="badge hold">未 ×${w.holds}</span></td></tr>`;
-  });
-  h+='</tbody></table>';
-  el.innerHTML=h;
-}
 
 // ---- Works Table ----
 let tblData=[];
